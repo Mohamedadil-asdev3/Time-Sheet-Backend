@@ -26,7 +26,8 @@ SECRET_KEY = 'django-insecure-8w6v%(v!f(e$hu^3@omg*veqqp(0i&36pd84cdfdozd58@vbl4
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]']  # ← add these for dev; expand in prod
+# ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]']  # ← add these for dev; expand in prod
+ALLOWED_HOSTS = ["*"]  # ← add these for dev; expand in prod
 
 
 # Application definition
@@ -38,10 +39,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-
     'rest_framework',                     # DRF
     'rest_framework_simplejwt',           # ← add this for JWT
-
+    'corsheaders',
     'master.apps.MasterConfig',
     'users.apps.UsersConfig',
     'task.apps.TaskConfig',
@@ -50,6 +50,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -57,6 +58,12 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+CORS_ALLOWED_ORIGINS = [ 
+    "http://localhost:5173", 
+]
+
+CORS_ALLOW_ALL_ORIGINS = True
+APPEND_SLASH = False
 ROOT_URLCONF = 'time_Sheet.urls'
 
 TEMPLATES = [

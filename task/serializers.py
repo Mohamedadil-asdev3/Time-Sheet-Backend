@@ -3,6 +3,11 @@ from rest_framework import serializers
 from .models import TaskList, Platform, Task, SubTask, Status
 
 
+# serializers.py
+from rest_framework import serializers
+from .models import TaskList, Platform, Task, SubTask, Status
+
+
 class TaskListSerializer(serializers.ModelSerializer):
     platform_name = serializers.CharField(source='platform.name', read_only=True)
     task_name     = serializers.CharField(source='task.name', read_only=True)

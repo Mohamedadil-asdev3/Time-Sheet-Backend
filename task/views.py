@@ -1,87 +1,128 @@
-# from django.shortcuts import render
+# from rest_framework import generics, status
+# from rest_framework.permissions import IsAuthenticated
+# from rest_framework.response import Response
+# from django.shortcuts import get_object_or_404
+# from .models import TaskList
+# from .serializers import TaskListSerializer
 
-# # Create your views here.
-# from django.http import HttpResponse
 
-# def task_home(request):
-#     return HttpResponse("Task app is working 🚀")
-# views.py
-from rest_framework.views import APIView
+# from collections import defaultdict
+# from rest_framework import generics, status
+# from rest_framework.response import Response
+# from rest_framework.permissions import IsAuthenticated
+
+# class TaskListAPIView(generics.ListCreateAPIView):
+#     permission_classes = [IsAuthenticated]
+#     serializer_class = TaskListSerializer
+
+#     def get_queryset(self):
+#         return (
+#             TaskList.objects
+#             .filter(user=self.request.user)
+#             .select_related('platform', 'task', 'subtask', 'status')
+#             .order_by('-date', 'task__name')
+#         )
+
+#     def get_serializer(self, *args, **kwargs):
+#         if isinstance(self.request.data, list):
+#             kwargs['many'] = True
+#         return super().get_serializer(*args, **kwargs)
+
+#     def perform_create(self, serializer):
+#         serializer.save(user=self.request.user)
+
+#     def list(self, request, *args, **kwargs):
+#         queryset = self.get_queryset()
+#         serializer = self.get_serializer(queryset, many=True)
+
+#         grouped = defaultdict(list)
+
+#         for item in serializer.data:
+#             grouped[item["date"]].append(item)
+
+#         response_data = [
+#             {
+#                 "date": date,
+#                 "tasks": tasks
+#             }
+#             for date, tasks in grouped.items()
+#         ]
+
+#         return Response(response_data, status=status.HTTP_200_OK)
+from rest_framework import generics, status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework import status, permissions
+from collections import defaultdict
 from django.shortcuts import get_object_or_404
 from .models import TaskList
 from .serializers import TaskListSerializer
 
 
-class TaskListAPIView(APIView):
+class TaskListAPIView(generics.ListCreateAPIView, generics.RetrieveDestroyAPIView):
     """
-    Single view handling all operations for TaskList:
-    • GET    /tasks/          → list current user's tasks
-    • POST   /tasks/          → create new task
-    • GET    /tasks/<pk>/     → retrieve single task
-    • PUT    /tasks/<pk>/     → full update
-    • DELETE /tasks/<pk>/     → delete task
+    List (grouped by date), Create (single/bulk), Retrieve, Delete tasks
+    - Delete allowed ONLY when status is "draft"
     """
+    permission_classes = [IsAuthenticated]
+    serializer_class = TaskListSerializer
+    lookup_field = 'pk'
 
-    permission_classes = [permissions.IsAuthenticated]
+    def get_queryset(self):
+        return (
+            TaskList.objects
+            .filter(user=self.request.user)
+            .select_related('platform', 'task', 'subtask', 'status')
+            .order_by('-date', 'task__name')
+        )
 
-    def get_object(self, pk):
+    def get_serializer(self, *args, **kwargs):
+        if isinstance(self.request.data, list):
+            kwargs['many'] = True
+        return super().get_serializer(*args, **kwargs)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+
+        grouped = defaultdict(list)
+        for item in serializer.data:
+            grouped[item["date"]].append(item)
+
+        response_data = [
+            {"date": date, "tasks": tasks}
+            for date, tasks in sorted(grouped.items(), reverse=True)
+        ]
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+    def get_object(self):
         """
-        Helper: get task by pk — only if it belongs to the current user
+        Retrieve task and check ownership
         """
+        pk = self.kwargs.get('pk')
         task = get_object_or_404(TaskList, pk=pk)
         if task.user != self.request.user:
             self.permission_denied(self.request)
         return task
 
-    def get(self, request, pk=None):
-        if pk is not None:
-            # Retrieve single task
-            task = self.get_object(pk)
-            serializer = TaskListSerializer(task)
-            return Response(serializer.data)
+    def destroy(self, request, *args, **kwargs):
+        """
+        DELETE allowed ONLY if status is "draft"
+        """
+        task = self.get_object()
 
-        # List all tasks of current user
-        tasks = TaskList.objects.filter(
-            user=request.user
-        ).select_related(
-            'platform', 'task', 'subtask', 'status'
-        ).order_by('-date', 'task__name')
-
-        serializer = TaskListSerializer(tasks, many=True)
-        return Response(serializer.data)
-
-    def post(self, request):
-        # Create new task
-        serializer = TaskListSerializer(
-            data=request.data,
-            context={'request': request}
-        )
-
-        if serializer.is_valid():
-            serializer.save()  # calls create() → sets user
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    def put(self, request, pk):
-        # Full update
-        task = self.get_object(pk)
-        serializer = TaskListSerializer(
-            task,
-            data=request.data,
-            context={'request': request}
-        )
-
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    def delete(self, request, pk):
-        # Delete (hard delete in this version)
-        task = self.get_object(pk)
-        task.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        # Check status before allowing delete
+        if task.status and task.status.name.lower() == "draft":
+            task.delete()
+            return Response({'message': 'Task Deleted Successfully'},status=status.HTTP_200_OK)
+        else:
+            return Response(
+                {
+                    "detail": "Only tasks in 'draft' status can be deleted. "
+                              "Other statuses are protected."
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
