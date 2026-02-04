@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Entity, Department, Location, Task, SubTask, Role, Platform, Status
+from .models import Entity, Department, Location, Task, SubTask, Role, Platform, Status,Holiday,EmailTemplate
 
 
 class EntitySerializer(serializers.ModelSerializer):
@@ -66,3 +66,64 @@ class StatusSerializer(serializers.ModelSerializer):
     class Meta:
         model = Status
         fields = "__all__"
+        
+class HolidaySerializer(serializers.ModelSerializer):
+    entity_names = serializers.ReadOnlyField()
+    department_name = serializers.CharField(
+        source='department.name', read_only=True
+    )
+    location_name = serializers.CharField(
+        source='location.name', read_only=True
+    )
+
+    class Meta:
+        model = Holiday
+        fields = [
+            'id',
+            'entity_ids',
+            'entity_names',
+            'department',
+            'department_name',
+            'location',
+            'location_name',
+            'name',
+            'date',
+            'description',
+            'status',
+            'code',
+            'created_on',
+            'created_by',
+            'created_ip',
+            'modified_on',
+            'modified_by',
+            'modified_ip',
+        ]
+
+        # 🔑 IMPORTANT
+        read_only_fields = [
+            'created_on',
+            'created_by',
+            'created_ip',
+            'modified_on',
+            'modified_by',
+            'modified_ip',
+        ]
+
+    def validate_department(self, value):
+        if value is None:
+            return value
+        if not Department.objects.filter(id=value.id).exists():
+            raise serializers.ValidationError("Invalid department ID")
+        return value
+
+    def validate_location(self, value):
+        if value is None:
+            return value
+        if not Location.objects.filter(id=value.id).exists():
+            raise serializers.ValidationError("Invalid location ID")
+        return value
+
+class EmailTemplateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EmailTemplate
+        fields = '__all__'

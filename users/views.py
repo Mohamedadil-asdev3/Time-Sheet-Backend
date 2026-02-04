@@ -281,7 +281,7 @@ class LoginView(APIView):
                     for rid in user.roles_ids:
                         try:
                             rol = Role.objects.get(id=rid)
-                            roles.append({"id": rol.id, "name": rol.field_name})
+                            roles.append({"id": rol.id, "name": rol.name})
                         except Role.DoesNotExist:
                             continue
                 else:
@@ -293,7 +293,7 @@ class LoginView(APIView):
                     {
                         "id": m.id,
                         "role_id": m.role.id,
-                        "role_name": m.role.field_name,
+                        "role_name": m.role.name,
                         "user_id": m.user.id,
                         "created_at": m.created_at,
                         "updated_at": m.updated_at,
@@ -367,7 +367,7 @@ class LoginView(APIView):
                 for rid in user.roles_ids:
                     try:
                         rol = Role.objects.get(id=rid)
-                        roles.append({"id": rol.id, "name": rol.field_name})
+                        roles.append({"id": rol.id, "name": rol.name})
                     except Role.DoesNotExist:
                         continue
             else:

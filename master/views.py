@@ -4,9 +4,9 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 
-from .models import Entity, Department, Location, Task ,SubTask, Role, Platform, Status
+from .models import Entity, Department, Location, Task ,SubTask, Role, Platform, Status,Holiday,EmailTemplate
 
-from .serializers import EntitySerializer,DepartmentSerializer, LocationSerializer, TaskSerializer, SubTaskSerializer, RoleSerializer, PlatformSerializer,StatusSerializer
+from .serializers import EntitySerializer,DepartmentSerializer, LocationSerializer, TaskSerializer, SubTaskSerializer, RoleSerializer, PlatformSerializer,StatusSerializer,HolidaySerializer,EmailTemplateSerializer
 
 # Create your views here.
 class EntityAPIView(APIView):
@@ -293,4 +293,95 @@ class StatusAPIView(APIView):
         status_obj.is_active = False
         status_obj.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
+class HolidayAPIView(APIView):
+    """
+    GET        /holidays/           → List
+    GET        /holidays/<id>/       → Retrieve
+    POST       /holidays/           → Create
+    PUT        /holidays/<id>/       → Update
+    """
+
+    def get(self, request, pk=None):
+        if pk:
+            holiday = get_object_or_404(Holiday, pk=pk, status__in=[1, 2])
+            serializer = HolidaySerializer(holiday)
+            return Response(serializer.data)
+
+        holidays = Holiday.objects.filter(status__in=[1, 2]).order_by('-date')
+        serializer = HolidaySerializer(holidays, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = HolidaySerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(
+                created_by=request.user,
+                created_ip=request.META.get('REMOTE_ADDR')
+            )
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def put(self, request, pk=None):
+        if not pk:
+            return Response(
+                {"error": "Holiday ID is required for update"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        holiday = get_object_or_404(Holiday, pk=pk)
+        serializer = HolidaySerializer(holiday, data=request.data, partial=True)
+
+        if serializer.is_valid():
+            serializer.save(
+                modified_by=request.user,
+                modified_ip=request.META.get('REMOTE_ADDR')
+            )
+            return Response(serializer.data)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+class EmailTemplateAPIView(APIView):
+    """
+    GET        /email-templates/           → List
+    GET        /email-templates/<id>/       → Retrieve
+    POST       /email-templates/           → Create
+    PUT        /email-templates/<id>/       → Update
+    """
+
+    def get(self, request, pk=None):
+        if pk:
+            template = get_object_or_404(EmailTemplate, pk=pk)
+            serializer = EmailTemplateSerializer(template)
+            return Response(serializer.data)
+
+        templates = EmailTemplate.objects.all().order_by('email_event')
+        serializer = EmailTemplateSerializer(templates, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = EmailTemplateSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def put(self, request, pk=None):
+        if not pk:
+            return Response(
+                {"error": "Template ID is required for update"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        template = get_object_or_404(EmailTemplate, pk=pk)
+        serializer = EmailTemplateSerializer(template, data=request.data, partial=True)
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 

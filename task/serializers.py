@@ -12,7 +12,7 @@ class TaskListSerializer(serializers.ModelSerializer):
         allow_null=True
     )
     status_name   = serializers.CharField(source='status.name', read_only=True)
-    user_username = serializers.CharField(source='user.username', read_only=True)
+    user_username = serializers.CharField(source='user.firstname', read_only=True)
 
     class Meta:
         model = TaskList

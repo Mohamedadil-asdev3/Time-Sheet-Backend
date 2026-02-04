@@ -7,7 +7,9 @@ from .views import (
     SubTaskAPIView,
     RoleAPIView,
     PlatformAPIView,
-    StatusAPIView
+    StatusAPIView,
+    HolidayAPIView,
+    EmailTemplateAPIView
 )
 
 urlpatterns = [
@@ -27,7 +29,12 @@ urlpatterns = [
     path('platform/',PlatformAPIView.as_view() ),
     path('platform/<int:pk>/',PlatformAPIView.as_view() ),
      path('status/',StatusAPIView.as_view() ),
-    path('status/<int:pk>/',StatusAPIView.as_view() )
+    path('status/<int:pk>/',StatusAPIView.as_view() ),
+    path('holidays/', HolidayAPIView.as_view(), name='holiday-list-create'),
+    path('holidays/<int:pk>/', HolidayAPIView.as_view(), name='holiday-detail'),
 
+    # Email Templates
+    path('email-templates/', EmailTemplateAPIView.as_view(), name='email-template-list-create'),
+    path('email-templates/<int:pk>/', EmailTemplateAPIView.as_view(), name='email-template-detail'),
    
 ]
