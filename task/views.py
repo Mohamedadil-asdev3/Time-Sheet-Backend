@@ -1,14 +1,58 @@
-# from django.shortcuts import render
+# from rest_framework import generics, status
+# from rest_framework.permissions import IsAuthenticated
+# from rest_framework.response import Response
+# from django.shortcuts import get_object_or_404
+# from .models import TaskList
+# from .serializers import TaskListSerializer
 
-# # Create your views here.
-# from django.http import HttpResponse
 
-# def task_home(request):
-#     return HttpResponse("Task app is working 🚀")
-# views.py
-from rest_framework.views import APIView
+# from collections import defaultdict
+# from rest_framework import generics, status
+# from rest_framework.response import Response
+# from rest_framework.permissions import IsAuthenticated
+
+# class TaskListAPIView(generics.ListCreateAPIView):
+#     permission_classes = [IsAuthenticated]
+#     serializer_class = TaskListSerializer
+
+#     def get_queryset(self):
+#         return (
+#             TaskList.objects
+#             .filter(user=self.request.user)
+#             .select_related('platform', 'task', 'subtask', 'status')
+#             .order_by('-date', 'task__name')
+#         )
+
+#     def get_serializer(self, *args, **kwargs):
+#         if isinstance(self.request.data, list):
+#             kwargs['many'] = True
+#         return super().get_serializer(*args, **kwargs)
+
+#     def perform_create(self, serializer):
+#         serializer.save(user=self.request.user)
+
+#     def list(self, request, *args, **kwargs):
+#         queryset = self.get_queryset()
+#         serializer = self.get_serializer(queryset, many=True)
+
+#         grouped = defaultdict(list)
+
+#         for item in serializer.data:
+#             grouped[item["date"]].append(item)
+
+#         response_data = [
+#             {
+#                 "date": date,
+#                 "tasks": tasks
+#             }
+#             for date, tasks in grouped.items()
+#         ]
+
+#         return Response(response_data, status=status.HTTP_200_OK)
+from rest_framework import generics, status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework import status, permissions
+from collections import defaultdict
 from django.shortcuts import get_object_or_404
 from .models import TaskList
 from .serializers import TaskListSerializer
@@ -96,8 +140,17 @@ class TaskListAPIView(APIView):
     • PUT    /tasks/<pk>/     → full update
     • DELETE /tasks/<pk>/     → delete task
     """
+    permission_classes = [IsAuthenticated]
+    serializer_class = TaskListSerializer
+    lookup_field = 'pk'
 
-    permission_classes = [permissions.IsAuthenticated]
+    def get_queryset(self):
+        return (
+            TaskList.objects
+            .filter(user=self.request.user)
+            .select_related('platform', 'task', 'subtask', 'status')
+            .order_by('-date', 'task__name')
+        )
 
     def get_object(self, pk):
         task = get_object_or_404(TaskList, pk=pk)

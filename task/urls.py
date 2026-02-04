@@ -11,8 +11,11 @@ app_name = 'tasks'
 
 urlpatterns = [
     # List + Create
-    path('taskslist/',          TaskListAPIView.as_view(), name='task-list'),
+    path('createTask/', TaskListAPIView.as_view(), name='task-list'),
+    path('taskslist/', TaskListAPIView.as_view(), name='task-list'),
 
     # Detail + Update + Delete
     path('taskslist/<int:pk>/', TaskListAPIView.as_view(), name='task-detail'),
+    path('tasks/<int:pk>/', TaskListAPIView.as_view(), name='task-detail'),
+    
 ]
