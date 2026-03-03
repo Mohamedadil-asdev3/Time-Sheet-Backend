@@ -44,36 +44,27 @@ class TaskListAPIView(APIView):
             'l1_approver', 'l2_approver', 'last_modified_by'
         ).order_by('-date', 'task__name')
 
-        # Role-based visibility
-        if user.is_staff:
-            # Admin sees ALL tasks
-            pass
-        else:
-            # Normal users & approvers see only their own created tasks
+        if not user.is_staff:
             queryset = queryset.filter(user=user)
 
         return queryset
 
     def get_object(self, pk):
         task = get_object_or_404(TaskList, pk=pk)
-
-        # Only owner or admin (staff) can access
         if task.user != self.request.user and not self.request.user.is_staff:
             raise PermissionDenied("You don't have permission to access this task.")
-
         return task
 
     def _create_audit_log(self, task, action, old_values=None, new_values=None, remarks=None):
-        request = self.request
         TaskListAuditLog.objects.create(
             task=task,
             action=action,
-            performed_by=request.user,
-            old_values=old_values,
-            new_values=new_values,
-            remarks=remarks,
-            ip_address=self._get_client_ip(request),
-            user_agent=request.META.get('HTTP_USER_AGENT', '')
+            performed_by=self.request.user,
+            old_values=old_values or {},
+            new_values=new_values or {},
+            remarks=remarks or '',
+            ip_address=self._get_client_ip(self.request),
+            user_agent=self.request.META.get('HTTP_USER_AGENT', '')
         )
 
     def _get_client_ip(self, request):
@@ -82,23 +73,10 @@ class TaskListAPIView(APIView):
             return x_forwarded_for.split(',')[0].strip()
         return request.META.get('REMOTE_ADDR', '')
 
-    def check_edit_permission(self, task, user):
-        """Only owner can edit fields in draft; staff can edit in Inprogress"""
-        if not task.status:
-            return False
-        status_lower = (task.status.name or '').lower().strip()
-        if task.user == user:
-            return status_lower == 'draft'
-        return user.is_staff and status_lower in ('inprogress', 'in progress')
-
     def apply_filters(self, request, queryset):
         params = request.query_params
-        user = request.user
-
-        # Only admin (staff) can filter by other users
-        if params.get('user_id') and user.is_staff:
+        if params.get('user_id') and request.user.is_staff:
             queryset = queryset.filter(user_id=params['user_id'])
-
         if params.get('start_date'):
             queryset = queryset.filter(date__gte=params['start_date'])
         if params.get('end_date'):
@@ -122,33 +100,43 @@ class TaskListAPIView(APIView):
     def get(self, request, pk=None):
         if pk:
             task = self.get_object(pk)
-            serializer = self.serializer_class(task)
-            return Response(serializer.data)
+            return Response(self.serializer_class(task).data)
 
-        queryset = self.get_queryset()
-        queryset = self.apply_filters(request, queryset)
-        serializer = self.serializer_class(queryset, many=True)
-        return Response(serializer.data)
+        qs = self.get_queryset()
+        qs = self.apply_filters(request, qs)
+        return Response(self.serializer_class(qs, many=True).data)
 
     def post(self, request):
-        # Staff (admin/approver) cannot create tasks
         if request.user.is_staff:
             return Response(
-                {"error": "Staff users cannot create new tasks. Use a regular account."},
+                {"error": "Staff users cannot create tasks"},
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        serializer = self.serializer_class(data=request.data, context={'request': request})
-        if serializer.is_valid():
-            task = serializer.save()
+        data = request.data
+        is_bulk = isinstance(data, list)
+
+        serializer = self.serializer_class(
+            data=data,
+            many=is_bulk,
+            context={'request': request}
+        )
+
+        if not serializer.is_valid():
+            print("Create errors:", serializer.errors)
+            return Response(serializer.errors, status=400)
+
+        tasks = serializer.save()
+
+        for task in (tasks if is_bulk else [tasks]):
             self._create_audit_log(
                 task=task,
                 action='CREATE',
-                new_values=serializer.data,
-                remarks="Task created"
+                new_values=self.serializer_class(task).data,
+                remarks="Bulk task created" if is_bulk else "Task created"
             )
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def put(self, request, pk):
         task = self.get_object(pk)
@@ -156,137 +144,124 @@ class TaskListAPIView(APIView):
 
         status_lower = (task.status.name or '').lower().strip() if task.status else ''
 
-        # Define old_values EARLY - prevents NameError
+        # Capture meaningful old values BEFORE any changes
         old_values = {
             'status': task.status.name if task.status else None,
-            'duration': str(task.duration),
+            'duration': str(task.duration) if task.duration is not None else None,
             'description': task.description or "",
             'bitrix_id': task.bitrix_id or "",
+            'l1_approver_id': task.l1_approver_id,
+            'l2_approver_id': task.l2_approver_id,
+            'l1_approved_at': task.l1_approved_at.isoformat() if task.l1_approved_at else None,
+            'l2_approved_at': task.l2_approved_at.isoformat() if task.l2_approved_at else None,
         }
 
-        # Debug prints
-        print(f"\n=== PUT DEBUG (Task {pk}) ===")
-        print(f"User: {user.firstname} (ID: {user.id}) | is_staff: {user.is_staff}")
-        print(f"Current status: {task.status.name if task.status else 'None'}")
-        print(f"Before → l1_approver_id: {task.l1_approver_id}, l2_approver_id: {task.l2_approver_id}")
-        print(f"Payload: {request.data}")
+        # ... permission checks, idempotent responses, edit permission ...
 
-        if not user.is_staff:
-            return Response({"error": "Only staff users can approve or update"}, status=403)
-
-        action = request.data.get('action')
-
-        # Already approved messages (no overwrite)
-        if action == 'L1_APPROVE' and task.l1_approver:
-            return Response({
-                "message": "This task is already L1 approved",
-                "l1_approver": task.l1_approver.firstname,
-                "l1_approved_at": task.l1_approved_at.strftime("%Y-%m-%d %H:%M:%S") if task.l1_approved_at else None
-            }, status=200)
-
-        if action == 'L2_APPROVE' and task.l2_approver:
-            return Response({
-                "message": "This task is already L2 approved",
-                "l2_approver": task.l2_approver.firstname,
-                "l2_approved_at": task.l2_approved_at.strftime("%Y-%m-%d %H:%M:%S") if task.l2_approved_at else None
-            }, status=200)
-
-        # Field edit permission (no approval action)
-        wants_approve = action in ('L1_APPROVE', 'L2_APPROVE')
-        if not wants_approve:
-            can_edit = (
-                (task.user == user and status_lower == 'draft') or
-                (user.is_staff and status_lower in ('inprogress', 'in progress'))
-            )
-            if not can_edit:
-                return Response({"error": "No permission to edit fields in this status"}, status=403)
-
-        # Serializer
-        serializer = TaskListSerializer(
+        serializer = self.serializer_class(
             task,
             data=request.data,
-            context={'request': request},
-            partial=True
+            partial=True,
+            context={'request': request}
         )
 
         if not serializer.is_valid():
             print("Serializer errors:", serializer.errors)
             return Response(serializer.errors, status=400)
 
-        status_changed = False
-
         # Status objects
-        in_progress_status = Status.objects.filter(name__iexact='In Progress').first() or \
-                             Status.objects.filter(name__iexact='inprogress').first()
+        in_progress = Status.objects.filter(name__iexact='In Progress').first() or \
+                      Status.objects.filter(name__iexact='inprogress').first()
+        completed   = Status.objects.filter(name__iexact='Completed').first() or \
+                      Status.objects.filter(name__iexact='Done').first()
 
-        completed_status = Status.objects.filter(name__iexact='Completed').first() or \
-                           Status.objects.filter(name__iexact='Done').first()
+        changed_fields = set()
 
-        # L1 approval
-        if action == 'L1_APPROVE' and in_progress_status:
-            if not task.l1_approver:
-                serializer.validated_data['l1_approver'] = user
-                serializer.validated_data['l1_approved_at'] = timezone.now()
+        if action == 'L1_APPROVE' and in_progress:
+            if task.l1_approver and task.l1_approver != user:
+                return Response({"error": "Only assigned L1 approver can approve"}, status=403)
+
+            serializer.validated_data['l1_approver'] = user
+            serializer.validated_data['l1_approved_at'] = timezone.now()
+            changed_fields.add('l1_approver')
+            changed_fields.add('l1_approved_at')
+
+            l2_candidate = None
+            if hasattr(user, 'user_id_supervisor') and user.user_id_supervisor:
+                if user.user_id_supervisor.is_manager:
+                    l2_candidate = user.user_id_supervisor
+
+            if l2_candidate != task.l2_approver:
+                serializer.validated_data['l2_approver'] = l2_candidate
+                changed_fields.add('l2_approver')
 
             if status_lower == 'draft':
-                serializer.validated_data['status'] = in_progress_status
-                status_changed = True
+                serializer.validated_data['status'] = in_progress
+                changed_fields.add('status')
 
-        # L2 approval
-        if action == 'L2_APPROVE' and completed_status:
-            if not task.l2_approver:
-                serializer.validated_data['l2_approver'] = user
-                serializer.validated_data['l2_approved_at'] = timezone.now()
+        if action == 'L2_APPROVE' and completed:
+            if task.l2_approver and task.l2_approver != user:
+                return Response({"error": "Only assigned L2 approver can approve"}, status=403)
 
-            serializer.validated_data['status'] = completed_status
-            status_changed = True
+            serializer.validated_data['l2_approver'] = user
+            serializer.validated_data['l2_approved_at'] = timezone.now()
+            serializer.validated_data['status'] = completed
+            changed_fields.update({'l2_approver', 'l2_approved_at', 'status'})
 
         serializer.validated_data['last_modified_by'] = user
 
+        # Perform the actual update
         updated_task = serializer.save()
 
-        # Audit log
+        # Capture new values AFTER save
         new_values = {
             'status': updated_task.status.name if updated_task.status else None,
-            'duration': str(updated_task.duration),
+            'duration': str(updated_task.duration) if updated_task.duration is not None else None,
             'description': updated_task.description or "",
             'bitrix_id': updated_task.bitrix_id or "",
+            'l1_approver_id': updated_task.l1_approver_id,
+            'l2_approver_id': updated_task.l2_approver_id,
+            'l1_approved_at': updated_task.l1_approved_at.isoformat() if updated_task.l1_approved_at else None,
+            'l2_approved_at': updated_task.l2_approved_at.isoformat() if updated_task.l2_approved_at else None,
         }
 
-        action_log = 'L2_APPROVE' if action == 'L2_APPROVE' else \
-                     'L1_APPROVE' if action == 'L1_APPROVE' else \
-                     'UPDATE'
+        # Determine action name for log
+        if action == 'L1_APPROVE':
+            log_action = 'L1_APPROVE'
+        elif action == 'L2_APPROVE':
+            log_action = 'L2_APPROVE'
+        else:
+            log_action = 'UPDATE'
 
-        remarks = request.data.get('remarks', 'Task updated/approved')
+        remarks = request.data.get('remarks', f"Task {log_action.lower()}d")
 
+        # Always create audit log (even for normal updates)
         self._create_audit_log(
             task=updated_task,
-            action=action_log,
+            action=log_action,
             old_values=old_values,
             new_values=new_values,
             remarks=remarks
         )
 
         return Response(serializer.data)
-
     def delete(self, request, pk):
         task = self.get_object(pk)
-        if task.user != request.user or (task.status and (task.status.name or '').lower().strip() != 'draft'):
-            return Response(
-                {"error": "Only the owner can delete draft tasks"},
-                status=status.HTTP_403_FORBIDDEN
-            )
+        status_name = (task.status.name or '').lower().strip() if task.status else ''
+        if task.user != request.user or status_name != 'draft':
+            return Response({"error": "Only owner can delete draft tasks"}, status=403)
 
         self._create_audit_log(
             task=task,
             action='DELETE',
             old_values={'id': task.id, 'task_name': task.task.name if task.task else None},
-            remarks="Task deleted by owner"
+            remarks="Deleted by owner"
         )
         task.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+# Audit log view remains unchanged
 class TaskListAuditLogAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -294,21 +269,292 @@ class TaskListAuditLogAPIView(APIView):
         if task_id:
             task = get_object_or_404(TaskList, pk=task_id)
             if task.user != request.user and not request.user.is_staff:
-                raise PermissionDenied("You don't have permission to view audit logs for this task.")
+                raise PermissionDenied()
             logs = TaskListAuditLog.objects.filter(task=task).order_by('-created_at')
-            serializer = TaskListAuditLogSerializer(logs, many=True)
-            return Response(serializer.data)
-
-        # Admin (staff) sees all logs
-        if request.user.is_staff:
-            logs = TaskListAuditLog.objects.all().order_by('-created_at')
         else:
-            # Approvers/normal users see only their own tasks' logs
-            logs = TaskListAuditLog.objects.filter(task__user=request.user).order_by('-created_at')
+            if request.user.is_staff:
+                logs = TaskListAuditLog.objects.all().order_by('-created_at')
+            else:
+                logs = TaskListAuditLog.objects.filter(task__user=request.user).order_by('-created_at')
 
         serializer = TaskListAuditLogSerializer(logs, many=True)
         return Response(serializer.data)
+
+# class TaskListAuditLogAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def get(self, request, task_id=None):
+#         if task_id:
+#             task = get_object_or_404(TaskList, pk=task_id)
+#             if task.user != request.user and not request.user.is_staff:
+#                 raise PermissionDenied("You don't have permission to view audit logs for this task.")
+#             logs = TaskListAuditLog.objects.filter(task=task).order_by('-created_at')
+#             serializer = TaskListAuditLogSerializer(logs, many=True)
+#             return Response(serializer.data)
+
+#         # Admin (staff) sees all logs
+#         if request.user.is_staff:
+#             logs = TaskListAuditLog.objects.all().order_by('-created_at')
+#         else:
+#             # Approvers/normal users see only their own tasks' logs
+#             logs = TaskListAuditLog.objects.filter(task__user=request.user).order_by('-created_at')
+
+#         serializer = TaskListAuditLogSerializer(logs, many=True)
+#         return Response(serializer.data)
+# class TaskListAPIView(APIView):
+#     serializer_class = TaskListSerializer
+
+#     def get_permissions(self):
+#         if self.request.method == 'GET':
+#             return [IsAuthenticated()]
+#         if self.request.method == 'POST':
+#             return [IsAuthenticated()]  # normal users can create
+#         if self.request.method in ['PUT', 'DELETE']:
+#             return [IsOwnerOrStaffApprover()]
+#         return [IsAuthenticated()]
+
+#     def get_queryset(self):
+#         user = self.request.user
+#         queryset = TaskList.objects.select_related(
+#             'platform', 'task', 'subtask', 'status',
+#             'l1_approver', 'l2_approver', 'last_modified_by'
+#         ).order_by('-date', 'task__name')
+
+#         if user.is_staff:
+#             # Staff sees everything
+#             pass
+#         else:
+#             # Normal users see only their own tasks
+#             queryset = queryset.filter(user=user)
+
+#         return queryset
+
+#     def get_object(self, pk):
+#         task = get_object_or_404(TaskList, pk=pk)
+
+#         # Only owner or staff can access
+#         if task.user != self.request.user and not self.request.user.is_staff:
+#             raise PermissionDenied("You don't have permission to access this task.")
+
+#         return task
+
+#     def _create_audit_log(self, task, action, old_values=None, new_values=None, remarks=None):
+#         request = self.request
+#         TaskListAuditLog.objects.create(
+#             task=task,
+#             action=action,
+#             performed_by=request.user,
+#             old_values=old_values or {},
+#             new_values=new_values or {},
+#             remarks=remarks or '',
+#             ip_address=self._get_client_ip(request),
+#             user_agent=request.META.get('HTTP_USER_AGENT', '')
+#         )
+
+#     def _get_client_ip(self, request):
+#         x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+#         if x_forwarded_for:
+#             return x_forwarded_for.split(',')[0].strip()
+#         return request.META.get('REMOTE_ADDR', '')
+
+#     def apply_filters(self, request, queryset):
+#         params = request.query_params
+#         user = request.user
+
+#         if params.get('user_id') and user.is_staff:
+#             queryset = queryset.filter(user_id=params['user_id'])
+
+#         if params.get('start_date'):
+#             queryset = queryset.filter(date__gte=params['start_date'])
+#         if params.get('end_date'):
+#             queryset = queryset.filter(date__lte=params['end_date'])
+#         if params.get('platform'):
+#             queryset = queryset.filter(platform_id=params['platform'])
+#         if params.get('task'):
+#             queryset = queryset.filter(task_id=params['task'])
+#         if params.get('status'):
+#             queryset = queryset.filter(status_id=params['status'])
+#         if search := params.get('search'):
+#             queryset = queryset.filter(
+#                 Q(description__icontains=search) |
+#                 Q(bitrix_id__icontains=search) |
+#                 Q(task__name__icontains=search) |
+#                 Q(subtask__name__icontains=search) |
+#                 Q(user__username__icontains=search)
+#             )
+#         return queryset
+
+#     def get(self, request, pk=None):
+#         if pk:
+#             task = self.get_object(pk)
+#             serializer = self.serializer_class(task)
+#             return Response(serializer.data)
+
+#         queryset = self.get_queryset()
+#         queryset = self.apply_filters(request, queryset)
+#         serializer = self.serializer_class(queryset, many=True)
+#         return Response(serializer.data)
+
+#     def post(self, request):
+#         if not request.user.groups.filter(name='TaskCreators').exists():
+#             return Response(
+#                 {"error": "You do not have permission to create tasks."},
+#                 status=status.HTTP_403_FORBIDDEN
+#             )
+
+#         serializer = TaskListSerializer(data=request.data, context={'request': request})
+#         if serializer.is_valid():
+#             task = serializer.save()
+#             # audit log...
+#             return Response(serializer.data, status=201)
+#         return Response(serializer.errors, status=400)
     
+#     def put(self, request, pk):
+#         task = self.get_object(pk)
+#         user = request.user
+
+#         # Prepare old values for audit
+#         old_values = {
+#             'status': task.status.name if task.status else None,
+#             'duration': str(task.duration) if task.duration else None,
+#             'description': task.description or "",
+#             'bitrix_id': task.bitrix_id or "",
+#         }
+
+#         action = request.data.get('action')
+#         remarks = request.data.get('remarks', 'Task updated')
+
+#         # Block already approved tasks from being re-approved
+#         if action == 'L1_APPROVE' and task.l1_approver:
+#             return Response({
+#                 "message": "This task is already L1 approved",
+#                 "l1_approver": task.l1_approver.name,
+#                 "l1_approved_at": task.l1_approved_at
+#             }, status=200)
+
+#         if action == 'L2_APPROVE' and task.l2_approver:
+#             return Response({
+#                 "message": "This task is already L2 approved",
+#                 "l2_approver": task.l2_approver.name,
+#                 "l2_approved_at": task.l2_approved_at
+#             }, status=200)
+
+#         # Status transition rules
+#         current_status = (task.status.name or '').lower().strip() if task.status else ''
+
+#         # Normal user can only edit Draft
+#         if not user.is_staff:
+#             if current_status != 'draft':
+#                 return Response({"error": "You can only edit tasks in Draft status"}, status=403)
+
+#         serializer = TaskListSerializer(
+#             task,
+#             data=request.data,
+#             context={'request': request},
+#             partial=True
+#         )
+
+#         if not serializer.is_valid():
+#             return Response(serializer.errors, status=400)
+
+#         # Status objects (cache them)
+#         draft_status = Status.objects.filter(name__iexact='draft').first()
+#         in_progress_status = Status.objects.filter(
+#             Q(name__iexact='In Progress') | Q(name__iexact='inprogress')
+#         ).first()
+#         completed_status = Status.objects.filter(
+#             Q(name__iexact='Completed') | Q(name__iexact='Done')
+#         ).first()
+
+#         status_changed = False
+
+#         # L1 Approval (only staff with L1 role or admin)
+#         if action == 'L1_APPROVE':
+#             if not in_progress_status:
+#                 return Response({"error": "In Progress status not found"}, status=500)
+
+#             if current_status == 'draft':
+#                 serializer.validated_data['status'] = in_progress_status
+#                 serializer.validated_data['l1_approver'] = user
+#                 serializer.validated_data['l1_approved_at'] = timezone.now()
+#                 status_changed = True
+#             else:
+#                 return Response({"error": "L1 approval only allowed on Draft tasks"}, status=400)
+
+#         # L2 Approval (only staff with L2 role or admin)
+#         if action == 'L2_APPROVE':
+#             if not completed_status:
+#                 return Response({"error": "Completed status not found"}, status=500)
+
+#             if current_status in ['in progress', 'inprogress']:
+#                 serializer.validated_data['status'] = completed_status
+#                 serializer.validated_data['l2_approver'] = user
+#                 serializer.validated_data['l2_approved_at'] = timezone.now()
+#                 status_changed = True
+#             else:
+#                 return Response({"error": "L2 approval only allowed on In Progress tasks"}, status=400)
+
+#         serializer.validated_data['last_modified_by'] = user
+
+#         updated_task = serializer.save()
+
+#         # Audit log for status change or approval
+#         new_values = {
+#             'status': updated_task.status.name if updated_task.status else None,
+#             'duration': str(updated_task.duration) if updated_task.duration else None,
+#             'description': updated_task.description or "",
+#             'bitrix_id': updated_task.bitrix_id or "",
+#         }
+
+#         log_action = action if action in ['L1_APPROVE', 'L2_APPROVE'] else 'UPDATE'
+#         if status_changed:
+#             log_action = f"{log_action} (Status Changed)"
+
+#         self._create_audit_log(
+#             task=updated_task,
+#             action=log_action,
+#             old_values=old_values,
+#             new_values=new_values,
+#             remarks=remarks
+#         )
+
+#         return Response(serializer.data)
+
+#     def delete(self, request, pk):
+#         task = self.get_object(pk)
+#         if task.user != request.user or (task.status and (task.status.name or '').lower().strip() != 'draft'):
+#             return Response(
+#                 {"error": "Only the owner can delete draft tasks"},
+#                 status=status.HTTP_403_FORBIDDEN
+#             )
+
+#         self._create_audit_log(
+#             task=task,
+#             action='DELETE',
+#             old_values={'id': task.id, 'task_name': task.task.name if task.task else None},
+#             remarks="Task deleted by owner"
+#         )
+#         task.delete()
+#         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# class TaskListAuditLogAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def get(self, request, task_id=None):
+#         if task_id:
+#             task = get_object_or_404(TaskList, pk=task_id)
+#             if task.user != request.user and not request.user.is_staff:
+#                 raise PermissionDenied("You don't have permission to view audit logs for this task.")
+#             logs = TaskListAuditLog.objects.filter(task=task).order_by('-created_at')
+#         else:
+#             if request.user.is_staff:
+#                 logs = TaskListAuditLog.objects.all().order_by('-created_at')
+#             else:
+#                 logs = TaskListAuditLog.objects.filter(task__user=request.user).order_by('-created_at')
+
+#         serializer = TaskListAuditLogSerializer(logs, many=True)
+#         return Response(serializer.data)   
     
 
 # Daily Timeline code 
@@ -672,4 +918,89 @@ class WorkHoursOverviewAPIView(APIView):
             })
             
 # Time Distribution by Task
+# Top Members by Hours
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+from django.db.models import Sum, Count
+from django.contrib.auth import get_user_model
+from django.utils import timezone
+from .models import TaskList
 
+User = get_user_model()
+
+class TopMembersAPIView(APIView):
+    """
+    GET /api/top-members/
+    
+    Returns top users ranked by total task hours (shown as hrs + mins).
+    
+    Query params:
+    - limit: number of top members (default 10, max 50)
+    - period: overall / today (default: overall)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        limit = min(int(request.query_params.get('limit', 10)), 50)
+        period = request.query_params.get('period', 'overall').lower()
+
+        today = timezone.now().date()
+
+        # Base queryset: all tasks (adjust status filter if you only want completed)
+        qs = TaskList.objects.all()
+
+        # Date filter
+        if period == 'today':
+            qs = qs.filter(date=today)
+        elif period == 'overall':
+            pass  # all time
+        else:
+            return Response({"error": "Invalid period. Use: overall / today"}, status=400)
+
+        if not request.user.is_staff:
+            qs = qs.filter(user=request.user)
+
+        # Aggregate: total duration (decimal) + task count per user
+        top_members = qs.values(
+            'user__id',
+            'user__name',
+            'user__firstname',
+            'user__email'
+        ).annotate(
+            total_duration=Sum('duration', default=0),
+            task_count=Count('id')
+        ).order_by('-total_duration')[:limit]
+
+        # Format result with hrs + mins
+        result = []
+        rank = 1
+        for row in top_members:
+            total_hours_decimal = float(row['total_duration'] or 0)  # decimal → float
+            hours = int(total_hours_decimal)
+            minutes = int((total_hours_decimal - hours) * 60)
+
+            name = row['user__firstname'] or row['user__name'] or "Unknown User"
+            username = row['user__name'] or row['user__email'] or "N/A"
+
+            result.append({
+                "rank": rank,
+                "user_id": row['user__id'],
+                "name": name,
+                "username": username,
+                "total_time": f"{hours} hrs {minutes} mins",
+                "total_hours_decimal": f"{total_hours_decimal:.2f}",
+                "task_count": row['task_count']
+            })
+            rank += 1
+
+        total_members = User.objects.filter(is_active=True).count()
+
+        return Response({
+            "status": "success",
+            "total_members_in_system": total_members,
+            "period": period.capitalize(),
+            "top_members_count": len(result),
+            "top_members": result
+        })

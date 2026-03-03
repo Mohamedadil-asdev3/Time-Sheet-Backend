@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'users.apps.UsersConfig',
     'task.apps.TaskConfig',
 ]
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -63,7 +64,7 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 CORS_ALLOW_ALL_ORIGINS = True
-APPEND_SLASH = False
+APPEND_SLASH = True
 ROOT_URLCONF = 'time_Sheet.urls'
 
 TEMPLATES = [
@@ -89,17 +90,26 @@ WSGI_APPLICATION = 'time_Sheet.wsgi.application'
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 # ────────────────────────────────────────────────
 
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': 'TimeSheet',
+#         'USER': 'postgres',
+#         'PASSWORD': 'Stemz@123',
+#         'HOST': 'localhost',          # ← add this (or '127.0.0.1')
+#         'PORT': '5432',               # ← add default PostgreSQL port
+#     }
+# }
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'TimeSheet',
+        'NAME': 'timesheet',      
         'USER': 'postgres',
-        'PASSWORD': 'Stemz@123',
-        'HOST': 'localhost',          # ← add this (or '127.0.0.1')
-        'PORT': '5432',               # ← add default PostgreSQL port
+        'PASSWORD': 'asdev1',
+        'HOST': 'localhost',
+        'PORT': '5432',
     }
 }
-
 
 # ────────────────────────────────────────────────
 # Password validation

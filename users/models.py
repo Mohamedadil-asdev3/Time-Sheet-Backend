@@ -28,34 +28,147 @@ class UserManager(BaseUserManager):
 
 
 
+# class User(AbstractBaseUser):
+#     name = models.CharField(max_length=255, unique=True, null=True, blank=True)
+#     employee_id = models.CharField(max_length=50, unique=True)
+#     email = models.EmailField(max_length=255, unique=True, null=True, blank=True) 
+#     password = models.CharField(max_length=255, null=True, blank=True)
+#     password_last_update = models.DateTimeField(null=True, blank=True)
+#     phone = models.CharField(max_length=255, null=True, blank=True)
+#     realname = models.CharField(max_length=255, null=True, blank=True)
+#     firstname = models.CharField(max_length=255, null=True, blank=True)
+#     entities_ids = models.JSONField(default=list, blank=True)
+#     entity = models.ForeignKey(masterModels.Entity, on_delete=models.SET_NULL, null=True)
+#     location = models.ForeignKey(masterModels.Location, on_delete=models.SET_NULL, null=True)
+#     department = models.ForeignKey(masterModels.Department, on_delete=models.SET_NULL, null=True)
+#     password_forget_token = models.CharField(max_length=40, null=True, blank=True)
+#     password_forget_token_date = models.DateTimeField(null=True, blank=True)
+#     force_password_change = models.BooleanField(default=False)
+#     is_active = models.BooleanField(default=True)
+#     is_deleted = models.BooleanField(default=False)
+#     is_manager = models.BooleanField(default=False)
+#     is_hod = models.BooleanField(default=False)
+#     is_ldap_user = models.BooleanField(default=False, help_text="Flag indicating if user is authenticated via LDAP")
+#     is_staff = models.BooleanField(default=False)
+#     is_superuser = models.BooleanField(default=False)
+#     created_by = models.IntegerField()
+#     modified_by = models.IntegerField()
+#     created_at = models.DateTimeField(auto_now_add=True)
+#     updated_at = models.DateTimeField(auto_now=True)
+
+
+#     objects = UserManager()
+
+#     USERNAME_FIELD = "name"
+#     REQUIRED_FIELDS = []
+
+#     class Meta:
+#         db_table = "users"
 class User(AbstractBaseUser):
+    id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=255, unique=True, null=True, blank=True)
-    employee_id = models.CharField(max_length=50, unique=True)
     email = models.EmailField(max_length=255, unique=True, null=True, blank=True) 
     password = models.CharField(max_length=255, null=True, blank=True)
     password_last_update = models.DateTimeField(null=True, blank=True)
     phone = models.CharField(max_length=255, null=True, blank=True)
+    phone2 = models.CharField(max_length=255, null=True, blank=True)
+    mobile = models.CharField(max_length=255, null=True, blank=True)
     realname = models.CharField(max_length=255, null=True, blank=True)
     firstname = models.CharField(max_length=255, null=True, blank=True)
-    entities_ids = models.JSONField(default=list, blank=True)
-    entity = models.ForeignKey(masterModels.Entity, on_delete=models.SET_NULL, null=True)
+    entities_ids = models.JSONField(default=list, blank=True)  # Array of entity IDs
     location = models.ForeignKey(masterModels.Location, on_delete=models.SET_NULL, null=True)
+    roles_ids = models.JSONField(default=list, blank=True)  # Array of role IDs (from TicketsMasterConfiguration)
+    force_password_change = models.BooleanField(default=False)
     department = models.ForeignKey(masterModels.Department, on_delete=models.SET_NULL, null=True)
+    language = models.CharField(max_length=10, null=True, blank=True)
+    use_mode = models.IntegerField(default=0)
+    list_limit = models.IntegerField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    comment = models.TextField(null=True, blank=True)
+    auths_id = models.IntegerField(default=0)
+    authtype = models.IntegerField(default=0)
+    last_login = models.DateTimeField(null=True, blank=True)
+    date_mod = models.DateTimeField(null=True, blank=True)
+    date_sync = models.DateTimeField(null=True, blank=True)
+    is_deleted = models.BooleanField(default=False)
+    profiles_id = models.IntegerField(default=0)
+    usertitles_id = models.IntegerField(default=0)
+    usercategories_id = models.IntegerField(default=0)
+    date_format = models.IntegerField(null=True, blank=True)
+    number_format = models.IntegerField(null=True, blank=True)
+    names_format = models.IntegerField(null=True, blank=True)
+    csv_delimiter = models.CharField(max_length=1, null=True, blank=True)
+    is_ids_visible = models.BooleanField(null=True, blank=True)
+    use_flat_dropdowntree = models.BooleanField(null=True, blank=True)
+    show_jobs_at_login = models.BooleanField(null=True, blank=True)
+    priority_1 = models.CharField(max_length=20, null=True, blank=True)
+    priority_2 = models.CharField(max_length=20, null=True, blank=True)
+    priority_3 = models.CharField(max_length=20, null=True, blank=True)
+    priority_4 = models.CharField(max_length=20, null=True, blank=True)
+    priority_5 = models.CharField(max_length=20, null=True, blank=True)
+    priority_6 = models.CharField(max_length=20, null=True, blank=True)
+    followup_private = models.BooleanField(null=True, blank=True)
+    task_private = models.BooleanField(null=True, blank=True)
+    default_requesttypes_id = models.IntegerField(null=True, blank=True)
     password_forget_token = models.CharField(max_length=40, null=True, blank=True)
     password_forget_token_date = models.DateTimeField(null=True, blank=True)
-    force_password_change = models.BooleanField(default=False)
-    is_active = models.BooleanField(default=True)
-    is_deleted = models.BooleanField(default=False)
-    is_manager = models.BooleanField(default=False)
+    user_dn = models.TextField(null=True, blank=True)
+    registration_number = models.CharField(max_length=255, null=True, blank=True)
+    show_count_on_tabs = models.BooleanField(null=True, blank=True)
+    refresh_views = models.IntegerField(null=True, blank=True)
+    set_default_tech = models.BooleanField(null=True, blank=True)
+    personal_token = models.CharField(max_length=255, null=True, blank=True)
+    personal_token_date = models.DateTimeField(null=True, blank=True)
+    api_token = models.CharField(max_length=255, null=True, blank=True)
+    api_token_date = models.DateTimeField(null=True, blank=True)
+    cookie_token = models.CharField(max_length=255, null=True, blank=True)
+    cookie_token_date = models.DateTimeField(null=True, blank=True)
+    display_count_on_home = models.IntegerField(null=True, blank=True)
+    notification_to_myself = models.BooleanField(null=True, blank=True)
+    duedateok_color = models.CharField(max_length=255, null=True, blank=True)
+    duedatewarning_color = models.CharField(max_length=255, null=True, blank=True)
+    duedatecritical_color = models.CharField(max_length=255, null=True, blank=True)
+    duedatewarning_less = models.IntegerField(null=True, blank=True)
+    duedatecritical_less = models.IntegerField(null=True, blank=True)
+    duedatewarning_unit = models.CharField(max_length=255, null=True, blank=True)
+    duedatecritical_unit = models.CharField(max_length=255, null=True, blank=True)
+    display_options = models.TextField(null=True, blank=True)
+    is_deleted_ldap = models.BooleanField(default=False)
+    pdffont = models.CharField(max_length=255, null=True, blank=True)
+    picture = models.CharField(max_length=255, null=True, blank=True)
+    begin_date = models.DateTimeField(null=True, blank=True)
+    end_date = models.DateTimeField(null=True, blank=True)
+    keep_devices_when_purging_item = models.BooleanField(null=True, blank=True)
+    privatebookmarkorder = models.TextField(null=True, blank=True)
+    backcreated = models.BooleanField(null=True, blank=True)
+    task_state = models.IntegerField(null=True, blank=True)
+    layout = models.CharField(max_length=20, null=True, blank=True)
+    palette = models.CharField(max_length=20, null=True, blank=True)
+    set_default_requester = models.BooleanField(null=True, blank=True)
+    lock_autolock_mode = models.BooleanField(null=True, blank=True)
+    lock_directunlock_notification = models.BooleanField(null=True, blank=True)
+    date_creation = models.DateTimeField(null=True, blank=True)
+    highcontrast_css = models.BooleanField(default=False)
+    plannings = models.TextField(null=True, blank=True)
+    sync_field = models.CharField(max_length=255, null=True, blank=True)
+    groups_id = models.IntegerField(default=0)
+    users_id_supervisor = models.IntegerField(default=0)
+    timezone = models.CharField(max_length=50, null=True, blank=True)
+    default_dashboard_central = models.CharField(max_length=100, null=True, blank=True)
+    default_dashboard_assets = models.CharField(max_length=100, null=True, blank=True)
+    default_dashboard_helpdesk = models.CharField(max_length=100, null=True, blank=True)
+    default_dashboard_mini_ticket = models.CharField(max_length=100, null=True, blank=True)
+    player_id = models.TextField()  # required
     is_hod = models.BooleanField(default=False)
     is_ldap_user = models.BooleanField(default=False, help_text="Flag indicating if user is authenticated via LDAP")
+
+       # 🔑 Required fields for Django Admin
     is_staff = models.BooleanField(default=False)
     is_superuser = models.BooleanField(default=False)
-    created_by = models.IntegerField()
-    modified_by = models.IntegerField()
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
+    no_entity_mail_sent = models.BooleanField(default=False)
+    created_by = models.IntegerField(null=True, blank=True)
+    modified_by = models.IntegerField(null=True, blank=True)
+    is_manager = models.BooleanField(default=False)
 
     objects = UserManager()
 
@@ -64,6 +177,15 @@ class User(AbstractBaseUser):
 
     class Meta:
         db_table = "users"
+        managed = True  # ✅ tells Django not to create/alter this table
+
+
+    # ✅ Prevent Django admin errors
+    def has_perm(self, perm, obj=None):
+        return True
+
+    def has_module_perms(self, app_label):
+        return True
 
 # class UsersGroup(models.Model):
 #     id = models.AutoField(primary_key=True)
