@@ -87,8 +87,6 @@ class TaskList(models.Model):
     
     l1_approved_at = models.DateTimeField(null=True, blank=True)
     l2_approved_at = models.DateTimeField(null=True, blank=True)
-    
-    # Track who last modified (for non-draft statuses)
     last_modified_by = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,
@@ -96,6 +94,8 @@ class TaskList(models.Model):
         blank=True,
         related_name="modified_tasks"
     )
+    l1_rejected_at = models.DateTimeField(null=True, blank=True)
+    l2_rejected_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(default=timezone.now, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
@@ -133,44 +133,119 @@ class TaskList(models.Model):
         return self.status.name.lower() if self.status else None
 
 
-class TaskListAuditLog(models.Model):
-    ACTION_CHOICES = [
-        ('CREATE', 'Create'),
-        ('UPDATE', 'Update'),
-        ('DELETE', 'Delete'),
-        ('L1_APPROVE', 'L1 Approval'),
-        ('L2_APPROVE', 'L2 Approval'),
-        ('STATUS_CHANGE', 'Status Change'),
-    ]
+# class TaskListAuditLog(models.Model):
+#     ACTION_CHOICES = [
+#         ('CREATE', 'Create'),
+#         ('UPDATE', 'Update'),
+#         ('DELETE', 'Delete'),
+#         ('L1_APPROVE', 'L1 Approval'),
+#         ('L2_APPROVE', 'L2 Approval'),
+#         ('STATUS_CHANGE', 'Status Change'),
+#     ]
     
+#     task = models.ForeignKey(
+#         TaskList,
+#         on_delete=models.CASCADE,
+#         related_name="audit_logs"
+#     )
+    
+#     action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    
+#     performed_by = models.ForeignKey(
+#         User,
+#         on_delete=models.SET_NULL,
+#         null=True,
+#         related_name="task_audit_actions"
+#     )
+    
+#     old_values = models.JSONField(null=True, blank=True)
+#     new_values = models.JSONField(null=True, blank=True)
+    
+#     remarks = models.TextField(blank=True, null=True)
+    
+#     ip_address = models.GenericIPAddressField(null=True, blank=True)
+#     user_agent = models.TextField(null=True, blank=True)
+    
+#     created_at = models.DateTimeField(auto_now_add=True)
+    
+#     class Meta:
+#         db_table = "task_list_audit_log"
+#         ordering = ["-created_at"]
+    
+#     def __str__(self):
+#         return f"{self.task.id} - {self.action} by {self.performed_by.username if self.performed_by else 'System'}"
+class TaskListAuditLog(models.Model):
+
     task = models.ForeignKey(
         TaskList,
         on_delete=models.CASCADE,
         related_name="audit_logs"
     )
-    
-    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
-    
+
     performed_by = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,
         null=True,
         related_name="task_audit_actions"
     )
-    
+
+    action = models.CharField(max_length=100)
+
+    # L1 Approval / Rejection
+    l1_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('APPROVED', 'Approved'),
+            ('REJECTED', 'Rejected')
+        ],
+        null=True,
+        blank=True
+    )
+
+    l1_action_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="l1_actions"
+    )
+
+    l1_action_at = models.DateTimeField(null=True, blank=True)
+
+    # L2 Approval / Rejection
+    l2_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('APPROVED', 'Approved'),
+            ('REJECTED', 'Rejected')
+        ],
+        null=True,
+        blank=True
+    )
+
+    l2_action_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="l2_actions"
+    )
+
+    l2_action_at = models.DateTimeField(null=True, blank=True)
+
+    l1_rejected_at = models.DateTimeField(null=True, blank=True)
+    l2_rejected_at = models.DateTimeField(null=True, blank=True)
+
     old_values = models.JSONField(null=True, blank=True)
     new_values = models.JSONField(null=True, blank=True)
-    
+
     remarks = models.TextField(blank=True, null=True)
-    
+
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.TextField(null=True, blank=True)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
         db_table = "task_list_audit_log"
         ordering = ["-created_at"]
-    
-    def __str__(self):
-        return f"{self.task.id} - {self.action} by {self.performed_by.username if self.performed_by else 'System'}"

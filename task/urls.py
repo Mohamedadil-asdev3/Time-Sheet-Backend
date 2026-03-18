@@ -5,7 +5,7 @@
 #     path('', views.task_home, name='task-home'),
 # ]
 from django.urls import path
-from .views import TaskListAPIView,TaskListAuditLogAPIView,SimpleTimeLogView,TimeLogStatsAPIView,WorkHoursOverviewAPIView,TopMembersAPIView
+from .views import TaskListAPIView,TaskListAuditLogAPIView,SimpleTimeLogView,TimeLogStatsAPIView,WorkHoursOverviewAPIView,TopMembersAPIView,TaskApprovalAPIView
 
 app_name = 'tasks'
 
@@ -24,4 +24,5 @@ urlpatterns = [
     path('time-logs/stats/', TimeLogStatsAPIView.as_view(), name='time-logs-stats'),
     path('work-hours/', WorkHoursOverviewAPIView.as_view(), name='work-hours'),
     path('top-members/', TopMembersAPIView.as_view(), name='top-members'),
+    path('tasks/approvals/', TaskApprovalAPIView.as_view(), name='task-approvals')
 ]

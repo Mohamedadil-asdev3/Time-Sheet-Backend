@@ -1,0 +1,48 @@
+*.pyc
+*migrations/
+# ==========================
+# Django
+# ==========================
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment files
+*.env
+venv/
+
+# System files
+.DS_Store
+*.swp
+
+*.log
+*.pot
+*.pyc
+__pycache__/
+db.sqlite3
+staticfiles/
+media/
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ==========================
+# Virtual Environment
+# ==========================
+venv/
+env/
+.env
+.env.*
+
+# ==========================
+# Migrations (ignored)
+# ==========================
+**/migrations/*.py
+!**/migrations/__init__.py
+
+# ====

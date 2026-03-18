@@ -105,9 +105,21 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'timesheet',      
         'USER': 'postgres',
-        'PASSWORD': 'asdev1',
+        'PASSWORD': 'Stemz@123',
         'HOST': 'localhost',
-        'PORT': '5432',
+        'PORT': '5433',
+    },
+
+    'keka_db': {
+        'ENGINE': 'django.db.backends.postgresql_psycopg2',
+        'NAME': 'stemz_keka',
+        'USER': 'pgbouncer_prod',
+        'PASSWORD': 'secure_password_prod123',
+        'HOST': '172.31.31.6',
+        'PORT': '6432',
+        'CONN_MAX_AGE':0,
+        'CONN_HEALTH_CHECKS':True
+        
     }
 }
 

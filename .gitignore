@@ -1,0 +1,106 @@
+*.pyc
+*migrations/
+# ==========================
+# Django
+# ==========================
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment files
+*.env
+venv/
+
+# System files
+.DS_Store
+*.swp
+
+*.log
+*.pot
+*.pyc
+__pycache__/
+db.sqlite3
+staticfiles/
+media/
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ==========================
+# Virtual Environment
+# ==========================
+venv/
+env/
+.env
+.env.*
+
+# ==========================
+# Migrations (ignored)
+# ==========================
+**/migrations/*.py
+!**/migrations/__init__.py
+
+# ==========================
+# Python
+# ==========================
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# ==========================
+# OS files
+# ==========================
+.DS_Store
+Thumbs.db
+
+# ==========================
+# IDE / Editor
+# ==========================
+.vscode/
+.idea/
+*.swp
+
+# ==========================
+# Test / Coverage
+# ==========================
+.coverage
+htmlcov/
+.pytest_cache/
+
+
+
+# # Python
+# __pycache__/
+# *.pyc
+# *.pyo
+
+# # Virtual environment
+# venv/
+# env/
+
+# # Django
+# *.log
+# db.sqlite3
+
+# # Environment variables
+# .env
+
+# # VS Code
+# .vscode/
+
+# # OS files
+# .DS_Store
+
+
+# **/migrations/*.py
+# !**/migrations/__init__.py
+*.py
+master/migrations/0001_initial.py
+master/migrations/0002_subtask_task.py

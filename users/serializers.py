@@ -78,7 +78,9 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [ 'id', 'name', 'employee_id', 'email', 'password', 'phone', 'realname', 'firstname', 'entities_ids', 'entity',
-            'location', 'department', 'is_active', 'is_manager', 'is_hod', 'is_ldap_user', 'is_staff', 'is_superuser', 'created_at', 'updated_at', ]
+            'location', 'department', 'is_active', 'is_manager', 'is_hod', 'is_ldap_user', 'is_staff', 'is_superuser', 'created_at', 'updated_at', 'first_level_manager',
+            'second_level_manager',
+            'third_level_manager' ]
         read_only_fields = [ 'id', 'created_at', 'updated_at', 'is_ldap_user', 'is_staff', 'is_superuser', ]
         extra_kwargs = {
             'name': {'required': False},
