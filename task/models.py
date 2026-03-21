@@ -65,8 +65,7 @@ class TaskList(models.Model):
         on_delete=models.PROTECT,
         related_name="task_entries",
     )
-    
-    # New fields for approval workflow
+
     l1_approver = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,

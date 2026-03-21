@@ -7,15 +7,17 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
 from django.utils import timezone
-
 from .models import TaskList, TaskListAuditLog
 from .serializers import TaskListSerializer, TaskListAuditLogSerializer
 from master.models import Status
 from isoweek import Week
+from django.contrib.auth import get_user_model
 from django.db.models import Count, Q,Sum
 from datetime import datetime, timedelta, date
 from django.utils import timezone
 from dateutil.relativedelta import relativedelta
+User = get_user_model()
+
 class IsOwnerOrStaffApprover(IsAuthenticated):
     def has_object_permission(self, request, view, obj):
         if obj.user == request.user:
@@ -354,16 +356,6 @@ class TaskListAuditLogAPIView(APIView):
         serializer = TaskListAuditLogSerializer(logs, many=True)
         return Response(serializer.data)
 
-
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
-from django.shortcuts import get_object_or_404
-from django.db.models import Q
-from django.utils import timezone
-
-from .models import TaskList
 
 
 class SimpleTimeLogView(APIView):
@@ -712,19 +704,7 @@ class WorkHoursOverviewAPIView(APIView):
                 "total_entries": yearly_total_entries,
                 "months": yearly_data
             })
-            
-# Time Distribution by Task
-# Top Members by Hours
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
-from django.db.models import Sum, Count
-from django.contrib.auth import get_user_model
-from django.utils import timezone
-from .models import TaskList
 
-User = get_user_model()
 
 class TopMembersAPIView(APIView):
     """
@@ -799,4 +779,361 @@ class TopMembersAPIView(APIView):
             "period": period.capitalize(),
             "top_members_count": len(result),
             "top_members": result
+        })
+    
+# class TimeDistributionAPIView(APIView):
+
+#     def get(self, request):
+#         user = request.user
+#         view_type = request.query_params.get("view", "daily")
+
+#         today = timezone.now().date()
+
+#         # ---------------- DATE FILTER ----------------
+#         if view_type == "daily":
+#             start_date = today
+#         elif view_type == "weekly":
+#             start_date = today - timedelta(days=7)
+#         elif view_type == "monthly":
+#             start_date = today - timedelta(days=30)
+#         else:
+#             return Response({"error": "Invalid view"}, status=400)
+
+#         queryset = TaskList.objects.filter(date__gte=start_date)
+
+#         # Non-staff → only their data
+#         if not user.is_staff:
+#             queryset = queryset.filter(user=user)
+#         else:
+#             user_id = request.query_params.get("user_id")
+#             if user_id:
+#                 queryset = queryset.filter(user_id=user_id)
+
+#         # ---------------- AGGREGATION ----------------
+#         data = (
+#             queryset
+#             .values("task__name")
+#             .annotate(total_hours=Sum("duration"))
+#             .order_by("-total_hours")
+#         )
+
+#         labels = []
+#         series = []
+
+#         for item in data:
+#             labels.append(item["task__name"])
+#             series.append(float(item["total_hours"] or 0))
+
+#         return Response({
+#             "labels": labels,
+#             "series": series
+#         })
+class TimeDistributionAPIView(APIView):
+
+    def get(self, request):
+        user = request.user
+        view_type = request.query_params.get("view", "daily")
+
+        today = timezone.now().date()
+
+        # ---------------- DATE FILTER ----------------
+        if view_type == "daily":
+            queryset = TaskList.objects.filter(date=today)
+
+        elif view_type == "weekly":
+            start_date = today - timedelta(days=7)
+            queryset = TaskList.objects.filter(date__range=[start_date, today])
+
+        elif view_type == "monthly":
+            start_date = today - timedelta(days=30)
+            queryset = TaskList.objects.filter(date__range=[start_date, today])
+
+        else:
+            return Response({"error": "Invalid view"}, status=400)
+
+        # ---------------- USER FILTER ----------------
+        if not user.is_staff:
+            queryset = queryset.filter(user=user)
+
+        # ---------------- AGGREGATION ----------------
+        data = (
+            queryset
+            .values("task__name")
+            .annotate(total_hours=Sum("duration"))
+            .order_by("-total_hours")
+        )
+
+        labels = [d["task__name"] for d in data if d["task__name"]]
+        series = [float(d["total_hours"] or 0) for d in data if d["task__name"]]
+
+        return Response({
+            "labels": labels if labels else ["No Data"],
+            "series": series if series else [0]
+        })
+# class TimeDistributionAPIView(APIView):
+
+#     def get(self, request):
+#         user = request.user
+#         view_type = request.query_params.get("view", "daily")
+
+#         today = timezone.now().date()
+
+#         if view_type == "daily":
+#             queryset = TaskList.objects.filter(date=today)
+
+#         elif view_type == "weekly":
+#             start_date = today - timedelta(days=7)
+#             queryset = TaskList.objects.filter(date__range=[start_date, today])
+
+#         elif view_type == "monthly":
+#             start_date = today - timedelta(days=30)
+#             queryset = TaskList.objects.filter(date__range=[start_date, today])
+
+#         else:
+#             return Response({"error": "Invalid view"}, status=400)
+
+#         # 🔥 DEBUG
+#         print("LOGGED USER:", user.id)
+#         print("TOTAL RECORDS:", TaskList.objects.count())
+#         print("BEFORE USER FILTER:", queryset.count())
+
+#         if not user.is_staff:
+#             queryset = queryset.filter(user=user)
+
+#         print("AFTER USER FILTER:", queryset.count())
+
+#         data = (
+#             queryset
+#             .values("task__name")
+#             .annotate(total_hours=Sum("duration"))
+#         )
+
+#         labels = [d["task__name"] for d in data if d["task__name"]]
+#         series = [float(d["total_hours"] or 0) for d in data if d["task__name"]]
+
+#         if not labels:
+#             return Response({
+#                 "labels": ["No Data"],
+#                 "series": [0]
+#             })
+
+#         return Response({
+#             "labels": labels,
+#             "series": series
+#         })
+
+
+class RecentTasksAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        # Get last 10 tasks
+        queryset = (
+            TaskList.objects
+            .select_related("task", "platform", "status")
+            .filter(user=user)
+            .order_by("-date", "-id")[:10]
+        )
+
+        data = []
+
+        for task in queryset:
+            # ✅ Convert decimal hours → "Xh Ym"
+            total_hours = float(task.duration or 0)
+            hours = int(total_hours)
+            minutes = int(round((total_hours - hours) * 60))
+
+            duration_str = f"{hours}h {minutes}m" if hours else f"{minutes}m"
+
+            data.append({
+                "id": task.id,
+                "task": task.task.name if task.task else "",
+                "platform": task.platform.name if task.platform else "",
+                "date": task.date.strftime("%d %b %Y") if task.date else "",
+                "duration": duration_str,
+                "status": task.status.name if task.status else "",
+            })
+
+        return Response(data)
+    
+class TopUsedTasksAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        # Aggregate total duration per task
+        tasks = (
+            TaskList.objects
+            .filter(user=user)
+            .values("task", "task__name")   # adjust if field is task_name
+            .annotate(total_duration=Sum("duration"))
+            .order_by("-total_duration")[:10]
+        )
+
+        # Total time (for percentage calculation)
+        total_time = sum(float(t["total_duration"] or 0) for t in tasks)
+
+        data = []
+        for i, task in enumerate(tasks, start=1):
+            hours = float(task["total_duration"] or 0)
+
+            percentage = (hours / total_time * 100) if total_time > 0 else 0
+
+            data.append({
+                "id": i,
+                "task": task["task__name"],  
+                "hours": round(hours, 1),
+                "percentage": round(percentage),
+            })
+
+        return Response(data)
+    
+
+class TopPlatformsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        view_type = request.query_params.get("view", "monthly")
+
+        today = timezone.now().date()
+
+        # ---------------- DATE FILTER ----------------
+        if view_type == "daily":
+            queryset = TaskList.objects.filter(date=today)
+
+        elif view_type == "weekly":
+            start_date = today - timedelta(days=7)
+            queryset = TaskList.objects.filter(date__range=[start_date, today])
+
+        elif view_type == "monthly":
+            start_date = today - timedelta(days=30)
+            queryset = TaskList.objects.filter(date__range=[start_date, today])
+
+        else:
+            return Response({"error": "Invalid view"}, status=400)
+
+        # ---------------- APPROVER FILTER ----------------
+        if not user.is_staff:
+            queryset = queryset.filter(
+                Q(l1_approver=user) |
+                Q(l2_approver=user) |
+                Q(user__first_level_manager=user) |
+                Q(user__second_level_manager=user)
+            )
+
+        # ---------------- AGGREGATION ----------------
+        data = (
+            queryset
+            .values("platform__id", "platform__name")
+            .annotate(
+                total_hours=Sum("duration"),
+                user_count=Count("user", distinct=True)
+            )
+            .order_by("-total_hours")[:5]
+        )
+
+        total_hours_all = sum([float(d["total_hours"] or 0) for d in data]) or 1
+
+        response = []
+
+        for d in data:
+            usage_percent = round((float(d["total_hours"]) / total_hours_all) * 100)
+
+            response.append({
+                "name": d["platform__name"],
+                "users": f"{d['user_count']} Active Users",
+                "usage": usage_percent
+            })
+
+        return Response(response)
+    
+
+class PlatformPerformanceAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        view_type = request.query_params.get("view", "monthly")
+
+        today = timezone.now().date()
+
+        # ---------------- DATE FILTER ----------------
+        if view_type == "daily":
+            queryset = TaskList.objects.filter(date=today)
+
+        elif view_type == "weekly":
+            start_date = today - timedelta(days=7)
+            queryset = TaskList.objects.filter(date__range=[start_date, today])
+
+        elif view_type == "monthly":
+            start_date = today - timedelta(days=30)
+            queryset = TaskList.objects.filter(date__range=[start_date, today])
+
+        else:
+            return Response({"error": "Invalid view"}, status=400)
+
+        # ---------------- APPROVER FILTER ----------------
+        if not user.is_staff:
+            queryset = queryset.filter(
+                Q(l1_approver=user) |
+                Q(l2_approver=user) |
+                Q(user__first_level_manager=user) |
+                Q(user__second_level_manager=user)
+            )
+
+        # ---------------- GROUP BY PLATFORM ----------------
+        platforms = (
+            queryset
+            .values("platform__id", "platform__name")
+            .annotate(
+                total_hours=Sum("duration"),
+                total_tasks=Count("id"),
+                users=Count("user", distinct=True),
+                completed_tasks=Count("id", filter=Q(status__name__iexact="Completed")),
+                approved_tasks=Count("id", filter=Q(l1_approved_at__isnull=False)),
+                integrated_tasks=Count("id", filter=Q(bitrix_id__isnull=False))
+            )
+        )
+
+        series = []
+
+        for p in platforms:
+            users = p["users"] or 1
+            total_tasks = p["total_tasks"] or 1
+
+            # ---------------- METRICS ----------------
+            active_users = min(users * 10, 100)  
+
+            performance = min(int((float(p["total_hours"] or 0) / users) * 10), 100)
+
+            reliability = int((p["approved_tasks"] / total_tasks) * 100)
+
+            integration = int((p["integrated_tasks"] / total_tasks) * 100)
+
+            satisfaction = int((p["completed_tasks"] / total_tasks) * 100)
+
+            series.append({
+                "name": p["platform__name"],
+                "data": [
+                    active_users,
+                    performance,
+                    reliability,
+                    integration,
+                    satisfaction
+                ]
+            })
+
+        return Response({
+            "categories": [
+                "Active Users",
+                "Performance",
+                "Reliability",
+                "Integration",
+                "Satisfaction"
+            ],
+            "series": series
         })
