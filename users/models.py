@@ -67,6 +67,10 @@ class UserManager(BaseUserManager):
 class User(AbstractBaseUser):
     id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=255, unique=True, null=True, blank=True)
+    employee_id = models.CharField(max_length=50, blank=True, null=True)
+    designation = models.CharField(max_length=255, null=True, blank=True)
+    business_unit = models.CharField(max_length=255, null=True, blank=True)
+    location_name = models.CharField(max_length=255, null=True, blank=True)
     email = models.EmailField(max_length=255, unique=True, null=True, blank=True) 
     password = models.CharField(max_length=255, null=True, blank=True)
     password_last_update = models.DateTimeField(null=True, blank=True)
@@ -161,40 +165,6 @@ class User(AbstractBaseUser):
     player_id = models.TextField()  # required
     is_hod = models.BooleanField(default=False)
     is_ldap_user = models.BooleanField(default=False, help_text="Flag indicating if user is authenticated via LDAP")
-#     reporting_manager = models.ForeignKey(
-#     "self",
-#     on_delete=models.SET_NULL,
-#     null=True,
-#     blank=True,
-#     related_name="team_members"
-# )
-    # first_level_manager = models.ForeignKey(
-    #     "self",
-    #     on_delete=models.SET_NULL,
-    #     null=True,
-    #     blank=True,
-    #     related_name="first_level_team"
-    # )
-
-    # second_level_manager = models.ForeignKey(
-    #     "self",
-    #     on_delete=models.SET_NULL,
-    #     null=True,
-    #     blank=True,
-    #     related_name="second_level_team"
-    # )
-
-    # third_level_manager = models.ForeignKey(
-    #     "self",
-    #     on_delete=models.SET_NULL,
-    #     null=True,
-    #     blank=True,
-    #     related_name="third_level_team"
-    # )
-
-    # first_level_manager_designation = models.CharField(max_length=255, null=True, blank=True)
-    # second_level_manager_designation = models.CharField(max_length=255, null=True, blank=True)
-    # third_level_manager_designation = models.CharField(max_length=255, null=True, blank=True)
     first_level_manager = models.ForeignKey(
         "self",
         on_delete=models.SET_NULL,
@@ -203,7 +173,6 @@ class User(AbstractBaseUser):
         related_name="+",
         db_index=True
     )
-
     second_level_manager = models.ForeignKey(
         "self",
         on_delete=models.SET_NULL,
@@ -221,7 +190,6 @@ class User(AbstractBaseUser):
         related_name="+",
         db_index=True
     )
-
     first_level_manager_designation = models.CharField(max_length=255, null=True, blank=True)
     second_level_manager_designation = models.CharField(max_length=255, null=True, blank=True)
     third_level_manager_designation = models.CharField(max_length=255, null=True, blank=True)

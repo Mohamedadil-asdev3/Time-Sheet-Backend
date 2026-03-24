@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
-from django.utils import timezone
+from django.utils.timezone import localtime
 from .models import TaskList, TaskListAuditLog
 from .serializers import TaskListSerializer, TaskListAuditLogSerializer
 from master.models import Status
@@ -16,6 +16,7 @@ from django.db.models import Count, Q,Sum
 from datetime import datetime, timedelta, date
 from django.utils import timezone
 from dateutil.relativedelta import relativedelta
+from collections import defaultdict
 User = get_user_model()
 
 class IsOwnerOrStaffApprover(IsAuthenticated):
@@ -1137,3 +1138,183 @@ class PlatformPerformanceAPIView(APIView):
             ],
             "series": series
         })
+class ProfileAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        # Manager
+        manager_name = ""
+        if user.first_level_manager and user.first_level_manager.realname:
+            manager_name = user.first_level_manager.realname.split("/")[0]
+
+        # Initials
+        initials = ""
+        if user.realname:
+            parts = user.realname.split()
+            initials = "".join([p[0] for p in parts[:2]]).upper()
+
+        return Response({
+            "id": user.id,
+            "name": user.realname.split("/")[0] if user.realname else "",
+            "firstname": user.firstname,
+            "email": user.email,
+            "phone": user.phone or user.mobile,
+            "employee_id": user.employee_id,
+            "department": user.department.name if user.department else "",
+
+            # ✅ FIXED FIELDS
+            "designation": user.designation or "",
+            "business_unit": user.business_unit or "",
+            "location": user.location_name or "",
+
+            "manager_name": manager_name,
+            "avatar_initials": initials,
+        }, status=status.HTTP_200_OK)
+    
+
+class ApprovalTableAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+
+        queryset = TaskList.objects.select_related(
+            "user",
+            "status",
+            "user__department",
+            "user__location"
+        ).all()
+
+        status_map = {
+            "inprogress": "In Progress",
+            "inreview": "In Review",
+            "completed": "Completed",
+        }
+
+        grouped = defaultdict(list)
+
+        for task in queryset:
+            status_name = task.get_status_lower()
+
+            if not status_name:
+                continue
+
+            key = status_name.replace(" ", "")
+
+            if key not in status_map:
+                continue
+
+            grouped[key].append({
+                "owner": task.user.realname or task.user.name,
+                "role": task.user.designation or "N/A",
+                "department": task.user.department.name if task.user.department else "N/A",
+                "location": (
+                    task.user.location.name
+                    if task.user.location else task.user.location_name or "N/A"
+                ),
+                "date": task.date.strftime("%d %b %Y"),
+            })
+
+        response_data = []
+
+        for key, title in status_map.items():
+            rows = grouped.get(key, [])
+
+            response_data.append({
+                "title": title,
+                "count": len(rows),
+                "rows": rows
+            })
+
+        return Response(response_data)
+
+class RecentRequestAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        queryset = TaskList.objects.select_related("user")
+
+        # ------------------- PENDING -------------------
+        pending_tasks = queryset.filter(
+            Q(
+                l1_approver=user,
+                l1_approved_at__isnull=True,
+                l1_rejected_at__isnull=True
+            ) |
+            Q(
+                l2_approver=user,
+                l1_approved_at__isnull=False,
+                l2_approved_at__isnull=True,
+                l2_rejected_at__isnull=True
+            )
+        ).order_by("-created_at")[:5]   # 🔥 latest 5
+
+        # ------------------- FORMAT FOR UI -------------------
+        recent_requests = []
+
+        for task in pending_tasks:
+            start_time = localtime(task.created_at).strftime("%I:%M %p")
+            end_time = localtime(task.updated_at).strftime("%I:%M %p")
+
+            recent_requests.append({
+                "id": task.id,
+                "name": task.user.name,
+                "time": f"{start_time} - {end_time}",
+            })
+
+        return Response({
+            "recent_requests": recent_requests
+        })
+    
+class TaskApproveRejectAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        task_id = request.data.get("task_id")
+        action = request.data.get("action")  # approve / reject
+
+        try:
+            task = TaskList.objects.get(id=task_id)
+        except TaskList.DoesNotExist:
+            return Response({"error": "Task not found"}, status=404)
+
+        now = timezone.now()
+
+        # ------------------- L1 APPROVAL -------------------
+        if task.l1_approver == user:
+
+            if task.l1_approved_at or task.l1_rejected_at:
+                return Response({"error": "Already processed by L1"}, status=400)
+
+            if action == "approve":
+                task.l1_approved_at = now
+
+            elif action == "reject":
+                task.l1_rejected_at = now
+
+        # ------------------- L2 APPROVAL -------------------
+        elif task.l2_approver == user:
+
+            # ❌ Block if L1 not approved
+            if not task.l1_approved_at:
+                return Response({"error": "L1 approval pending"}, status=400)
+
+            if task.l2_approved_at or task.l2_rejected_at:
+                return Response({"error": "Already processed by L2"}, status=400)
+
+            if action == "approve":
+                task.l2_approved_at = now
+
+            elif action == "reject":
+                task.l2_rejected_at = now
+
+        else:
+            return Response({"error": "Not authorized"}, status=403)
+
+        task.save()
+
+        return Response({"message": f"{action.capitalize()}d successfully"})
