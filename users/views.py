@@ -491,9 +491,13 @@ class LoginView(APIView):
         password = request.data.get("password")
 
         if not username or not password:
-            return Response({"error": "Username and password are required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Username and password are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         username_ad = ensure_domain_in_username(username)
+
         ldap_authenticated = False
         ad_raw = {}
         department_instance = None
@@ -503,29 +507,56 @@ class LoginView(APIView):
             try:
                 ldap_server = "ldap://172.31.46.129:389"
                 base_dn = "dc=qatarmedicalcenter,dc=com"
+
                 ldap_client = ldap.initialize(ldap_server)
                 ldap_client.set_option(ldap.OPT_REFERRALS, 0)
+
                 ldap_client.simple_bind_s(username_ad, password)
 
                 search_filter = f"(&(objectClass=user)(userPrincipalName={username_ad}))"
-                attrs = [
-                    "displayName", "givenName", "sn", "mail", "userPrincipalName",
-                    "department", "title", "telephoneNumber", "mobile", "manager"
-                ]
-                result = ldap_client.search_s(base_dn, ldap.SCOPE_SUBTREE, search_filter, attrs)
+                attrs = ["*", "+"]
+
+                result = ldap_client.search_s(
+                    base_dn,
+                    ldap.SCOPE_SUBTREE,
+                    search_filter,
+                    attrs
+                )
 
                 if result:
                     ldap_authenticated = True
                     _, user_info_raw = result[0]
                     ad_raw = decode_ldap_data(user_info_raw)
 
-                    display_name = ad_raw.get("displayName", [username.split("@")[0]])[0]
+                    # 🔹 Extract LDAP fields
+                    employee_id = ad_raw.get("description", [""])[0]
+                    display_name = ad_raw.get("displayName", [username])[0]
                     email = ad_raw.get("mail", [username_ad])[0]
                     first_name = ad_raw.get("givenName", [""])[0]
-                    last_name = ad_raw.get("sn", [""])[0]
                     department_name = ad_raw.get("department", [""])[0]
-                    phone = ad_raw.get("telephoneNumber", [""])[0] or ad_raw.get("mobile", [""])[0] or ""
 
+                    phone = (
+                        ad_raw.get("telephoneNumber", [""])[0]
+                        or ad_raw.get("mobile", [""])[0]
+                        or ""
+                    )
+
+                    # 🔥 Parse designation & BU from displayName
+                    designation = ""
+                    business_unit = ""
+
+                    if display_name and "/" in display_name:
+                        parts = display_name.split("/")
+                        if len(parts) >= 2:
+                            designation = parts[1].strip()
+                        if len(parts) >= 3:
+                            business_unit = parts[2].strip()
+
+                    # 🔥 ✅ NEW: Get Location from LDAP field
+                    office_location = ad_raw.get("physicalDeliveryOfficeName", [""])[0]
+
+                   
+                    # Department mapping
                     if department_name:
                         department_instance = Department.objects.filter(
                             name__iexact=department_name
@@ -534,38 +565,49 @@ class LoginView(APIView):
                 ldap_client.unbind_s()
 
             except ldap.INVALID_CREDENTIALS:
-                return Response({"error": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
-            except ldap.SERVER_DOWN:
-                logger.error("LDAP server unreachable")
-            except Exception as e:
-                logger.error(f"LDAP error: {str(e)}")
+                return Response({"error": "Invalid credentials"}, status=401)
 
-        # ---------------------- Find or Create Local User ----------------------
+            except Exception as e:
+                return Response({"error": str(e)}, status=500)
+
+        # ---------------------- Find or Create User ----------------------
         try:
             user = None
+
             if ldap_authenticated and email:
                 user = User.objects.filter(email__iexact=email).first()
+
             if not user:
                 user = User.objects.filter(name__iexact=username_ad).first()
 
+            # ---------------- UPDATE EXISTING USER ----------------
             if user:
-                # Update user info
                 if ldap_authenticated:
                     user.email = email
-                    user.firstname = first_name or display_name.split()[0] if display_name else user.firstname
-                    user.realname = display_name or getattr(user, 'realname', '')
-                    user.phone = phone or getattr(user, 'phone', '')
-                    user.mobile = phone or getattr(user, 'mobile', '')
-                    user.department = department_instance or getattr(user, 'department', None)
+                    user.firstname = first_name
+                    user.realname = display_name
+                    user.phone = phone
+                    user.mobile = phone
+                    user.employee_id = employee_id
+                    user.department = department_instance
+
+                    # 🔥 SAVE VALUES
+                    user.designation = designation
+                    user.business_unit = business_unit
+                    user.location_name = office_location
+
                     user.is_ldap_user = True
                     user.force_password_change = False
+
                     if password:
                         user.password = make_password(password)
+
                     user.date_mod = timezone.now()
                     user.date_sync = timezone.now()
                     user.save()
+
+            # ---------------- CREATE NEW USER ----------------
             else:
-                # Create new user
                 user = User.objects.create(
                     name=username_ad,
                     email=email if ldap_authenticated else username,
@@ -576,46 +618,56 @@ class LoginView(APIView):
                     department=department_instance if ldap_authenticated else None,
                     password=make_password(password),
                     is_ldap_user=ldap_authenticated,
-                    force_password_change=False,
+                    employee_id=employee_id if ldap_authenticated else "",
+
+                    designation=designation if ldap_authenticated else "",
+                    business_unit=business_unit if ldap_authenticated else "",
+                    location_name=office_location if ldap_authenticated else "",
+
                     date_creation=timezone.now(),
                     date_mod=timezone.now(),
                     date_sync=timezone.now(),
                     users_id_supervisor=0,
-                    player_id="",  # required field
+                    player_id="",
                 )
 
-            # ---------------------- Sync managers ----------------------
-     
+            # ---------------- MANAGER ----------------
+            manager_dn = ad_raw.get("manager", [""])[0]
+            manager_name = ""
+            if manager_dn:
+                manager_name = manager_dn.split(",")[0].replace("CN=", "")
 
-            # ---------------------- Build response ----------------------
+            # ---------------- RESPONSE ----------------
+            if user.is_ldap_user:
+                name_value = user.realname.split("/")[0] if user.realname else user.name
+            else:
+                name_value = user.realname or user.name
+
             refresh = RefreshToken.for_user(user)
-            user_data = {
-                "id": user.id,
-                "name": user.name,
-                "email": user.email,
-                "firstname": user.firstname,
-                "realname": user.realname,
-                "phone": user.phone,
-                "mobile": user.mobile,
-                "department": user.department.name if user.department else "",
-                "first_level_manager": getattr(user.first_level_manager, 'id', None),
-                "second_level_manager": getattr(user.second_level_manager, 'id', None),
-                "third_level_manager": getattr(user.third_level_manager, 'id', None),
-                "users_id_supervisor": user.users_id_supervisor,
-                "is_ldap_user": user.is_ldap_user,
-            }
 
             return Response({
-                "message": f"Login successful ({'AD/LDAP' if ldap_authenticated else 'Local DB'} Authenticated)",
-                "user": user_data,
-                "ad_raw": ad_raw if ldap_authenticated else None,
+                "message": f"Login successful ({'AD/LDAP' if ldap_authenticated else 'Local DB'})",
+                "user": {
+                    "id": user.id,
+                    "name": name_value,
+                    "email": user.email,
+                    "firstname": user.firstname,
+                    "phone": user.phone,
+                    "mobile": user.mobile,
+                    "department": user.department.name if user.department else "",
+                    "designation": user.designation,
+                    "business_unit": user.business_unit,
+                    "location": user.location_name,  # ✅ FINAL FIX
+                    "employee_id": user.employee_id,
+                    "is_ldap_user": user.is_ldap_user,
+                },
+                "manager_name": manager_name,
                 "refresh": str(refresh),
                 "access": str(refresh.access_token),
-            }, status=status.HTTP_200_OK)
+            })
 
         except Exception as e:
-            logger.exception("Critical error in login process")
-            return Response({"error": f"Server error: {str(e)}"}, status=500)
+            return Response({"error": str(e)}, status=500)
 # def sync_user_managers(user):
 #     cursor = connections['keka_db'].cursor()
 
