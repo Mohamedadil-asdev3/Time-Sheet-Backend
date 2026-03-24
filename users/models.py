@@ -231,7 +231,7 @@ class User(AbstractBaseUser):
     created_by = models.IntegerField(null=True, blank=True)
     modified_by = models.IntegerField(null=True, blank=True)
     is_manager = models.BooleanField(default=False)
-
+    employee_id = models.CharField(max_length=50, null=True, blank=True)
     objects = UserManager()
 
     USERNAME_FIELD = "name"
@@ -241,7 +241,7 @@ class User(AbstractBaseUser):
         db_table = "users"
         managed = True  # ✅ tells Django not to create/alter this table
 
-
+   
     # ✅ Prevent Django admin errors
     def has_perm(self, perm, obj=None):
         return True

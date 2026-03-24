@@ -1,5 +1,5 @@
 *.pyc
-*migrations/
+# *migrations/
 # ==========================
 # Django
 # ==========================
@@ -42,7 +42,7 @@ env/
 # ==========================
 # Migrations (ignored)
 # ==========================
-**/migrations/*.py
-!**/migrations/__init__.py
+# **/migrations/*.py
+# !**/migrations/__init__.py
 
 # ====

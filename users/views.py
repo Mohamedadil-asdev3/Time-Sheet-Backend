@@ -21,8 +21,12 @@ class UserListCreateAPIView(APIView):
     """
     permission_classes = [permissions.IsAdminUser]  # ← change to your needs
 
+    # def get(self, request):
+    #     users = User.objects.filter(is_deleted=False).order_by('-created_at')
+    #     serializer = UserSerializer(users, many=True)
+    #     return Response(serializer.data)
     def get(self, request):
-        users = User.objects.filter(is_deleted=False).order_by('-created_at')
+        users = User.objects.filter(is_deleted=False).order_by('id')
         serializer = UserSerializer(users, many=True)
         return Response(serializer.data)
 
