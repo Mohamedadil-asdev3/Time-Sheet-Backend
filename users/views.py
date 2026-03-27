@@ -8,7 +8,7 @@ from rest_framework import status, permissions
 from rest_framework.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404
 from .models import User,UserRoleMapping
-from .serializers import UserSerializer,UserRoleMappingSerializer
+from .serializers import UserSerializer,UserRoleMappingSerializer,MemberSerializer
 from django.utils import timezone
 from django.db import connections
 from users.models import User
@@ -668,6 +668,8 @@ class LoginView(APIView):
 
         except Exception as e:
             return Response({"error": str(e)}, status=500)
+        
+
 # def sync_user_managers(user):
 #     cursor = connections['keka_db'].cursor()
 
@@ -1311,3 +1313,15 @@ class ChangePasswordView(APIView):
             {"message": "Password changed successfully"}, 
             status=status.HTTP_200_OK
         )
+    
+
+class ApprovalMemberListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # Filter only active users if needed
+        users = User.objects.filter(is_active=True, is_deleted=False)
+        serializer = MemberSerializer(users, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+

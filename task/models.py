@@ -132,51 +132,9 @@ class TaskList(models.Model):
         return self.status.name.lower() if self.status else None
 
 
-# class TaskListAuditLog(models.Model):
-#     ACTION_CHOICES = [
-#         ('CREATE', 'Create'),
-#         ('UPDATE', 'Update'),
-#         ('DELETE', 'Delete'),
-#         ('L1_APPROVE', 'L1 Approval'),
-#         ('L2_APPROVE', 'L2 Approval'),
-#         ('STATUS_CHANGE', 'Status Change'),
-#     ]
-    
-#     task = models.ForeignKey(
-#         TaskList,
-#         on_delete=models.CASCADE,
-#         related_name="audit_logs"
-#     )
-    
-#     action = models.CharField(max_length=20, choices=ACTION_CHOICES)
-    
-#     performed_by = models.ForeignKey(
-#         User,
-#         on_delete=models.SET_NULL,
-#         null=True,
-#         related_name="task_audit_actions"
-#     )
-    
-#     old_values = models.JSONField(null=True, blank=True)
-#     new_values = models.JSONField(null=True, blank=True)
-    
-#     remarks = models.TextField(blank=True, null=True)
-    
-#     ip_address = models.GenericIPAddressField(null=True, blank=True)
-#     user_agent = models.TextField(null=True, blank=True)
-    
-#     created_at = models.DateTimeField(auto_now_add=True)
-    
-#     class Meta:
-#         db_table = "task_list_audit_log"
-#         ordering = ["-created_at"]
-    
-#     def __str__(self):
-#         return f"{self.task.id} - {self.action} by {self.performed_by.username if self.performed_by else 'System'}"
 class TaskListAuditLog(models.Model):
-
     task = models.ForeignKey(
-        TaskList,
+        "TaskList",
         on_delete=models.CASCADE,
         related_name="audit_logs"
     )
@@ -191,16 +149,16 @@ class TaskListAuditLog(models.Model):
     action = models.CharField(max_length=100)
 
     # L1 Approval / Rejection
+    L1_STATUS_CHOICES = [
+        ('APPROVED', 'Approved'),
+        ('REJECTED', 'Rejected')
+    ]
     l1_status = models.CharField(
         max_length=20,
-        choices=[
-            ('APPROVED', 'Approved'),
-            ('REJECTED', 'Rejected')
-        ],
+        choices=L1_STATUS_CHOICES,
         null=True,
         blank=True
     )
-
     l1_action_by = models.ForeignKey(
         User,
         null=True,
@@ -208,20 +166,19 @@ class TaskListAuditLog(models.Model):
         on_delete=models.SET_NULL,
         related_name="l1_actions"
     )
-
     l1_action_at = models.DateTimeField(null=True, blank=True)
 
     # L2 Approval / Rejection
+    L2_STATUS_CHOICES = [
+        ('APPROVED', 'Approved'),
+        ('REJECTED', 'Rejected')
+    ]
     l2_status = models.CharField(
         max_length=20,
-        choices=[
-            ('APPROVED', 'Approved'),
-            ('REJECTED', 'Rejected')
-        ],
+        choices=L2_STATUS_CHOICES,
         null=True,
         blank=True
     )
-
     l2_action_by = models.ForeignKey(
         User,
         null=True,
@@ -229,17 +186,18 @@ class TaskListAuditLog(models.Model):
         on_delete=models.SET_NULL,
         related_name="l2_actions"
     )
-
     l2_action_at = models.DateTimeField(null=True, blank=True)
 
+    # Optional rejected timestamps
     l1_rejected_at = models.DateTimeField(null=True, blank=True)
     l2_rejected_at = models.DateTimeField(null=True, blank=True)
 
+    # Old and new task values
     old_values = models.JSONField(null=True, blank=True)
     new_values = models.JSONField(null=True, blank=True)
 
+    # Extra info
     remarks = models.TextField(blank=True, null=True)
-
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.TextField(null=True, blank=True)
 
@@ -248,3 +206,89 @@ class TaskListAuditLog(models.Model):
     class Meta:
         db_table = "task_list_audit_log"
         ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"AuditLog: {self.action} for Task {self.task_id} by {self.performed_by_id}"
+
+    # Optional helper methods for easy API display
+    def l1_status_display(self):
+        return dict(self.L1_STATUS_CHOICES).get(self.l1_status, None)
+
+    def l2_status_display(self):
+        return dict(self.L2_STATUS_CHOICES).get(self.l2_status, None)
+    
+# class TaskListAuditLog(models.Model):
+
+#     task = models.ForeignKey(
+#         TaskList,
+#         on_delete=models.CASCADE,
+#         related_name="audit_logs"
+#     )
+
+#     performed_by = models.ForeignKey(
+#         User,
+#         on_delete=models.SET_NULL,
+#         null=True,
+#         related_name="task_audit_actions"
+#     )
+
+#     action = models.CharField(max_length=100)
+
+#     # L1 Approval / Rejection
+#     l1_status = models.CharField(
+#         max_length=20,
+#         choices=[
+#             ('APPROVED', 'Approved'),
+#             ('REJECTED', 'Rejected')
+#         ],
+#         null=True,
+#         blank=True
+#     )
+
+#     l1_action_by = models.ForeignKey(
+#         User,
+#         null=True,
+#         blank=True,
+#         on_delete=models.SET_NULL,
+#         related_name="l1_actions"
+#     )
+
+#     l1_action_at = models.DateTimeField(null=True, blank=True)
+
+#     # L2 Approval / Rejection
+#     l2_status = models.CharField(
+#         max_length=20,
+#         choices=[
+#             ('APPROVED', 'Approved'),
+#             ('REJECTED', 'Rejected')
+#         ],
+#         null=True,
+#         blank=True
+#     )
+
+#     l2_action_by = models.ForeignKey(
+#         User,
+#         null=True,
+#         blank=True,
+#         on_delete=models.SET_NULL,
+#         related_name="l2_actions"
+#     )
+
+#     # l2_action_at = models.DateTimeField(null=True, blank=True)
+
+#     # l1_rejected_at = models.DateTimeField(null=True, blank=True)
+#     # l2_rejected_at = models.DateTimeField(null=True, blank=True)
+
+#     old_values = models.JSONField(null=True, blank=True)
+#     new_values = models.JSONField(null=True, blank=True)
+
+#     remarks = models.TextField(blank=True, null=True)
+
+#     ip_address = models.GenericIPAddressField(null=True, blank=True)
+#     user_agent = models.TextField(null=True, blank=True)
+
+#     created_at = models.DateTimeField(auto_now_add=True)
+
+#     class Meta:
+#         db_table = "task_list_audit_log"
+#         ordering = ["-created_at"]

@@ -71,6 +71,17 @@ class TaskListAPIView(APIView):
 
         return task
 
+    # def _create_audit_log(self, task, action, old_values=None, new_values=None, remarks=None):
+    #     TaskListAuditLog.objects.create(
+    #         task=task,
+    #         action=action,
+    #         performed_by=self.request.user,
+    #         old_values=old_values or {},
+    #         new_values=new_values or {},
+    #         remarks=remarks or '',
+    #         ip_address=self._get_client_ip(self.request),
+    #         user_agent=self.request.META.get('HTTP_USER_AGENT', '')
+    #     )
     def _create_audit_log(self, task, action, old_values=None, new_values=None, remarks=None):
         TaskListAuditLog.objects.create(
             task=task,
@@ -80,7 +91,15 @@ class TaskListAPIView(APIView):
             new_values=new_values or {},
             remarks=remarks or '',
             ip_address=self._get_client_ip(self.request),
-            user_agent=self.request.META.get('HTTP_USER_AGENT', '')
+            user_agent=self.request.META.get('HTTP_USER_AGENT', ''),
+            l1_status=task.l1_status if hasattr(task, 'l1_status') else None,
+            l2_status=task.l2_status if hasattr(task, 'l2_status') else None,
+            l1_action_by=task.l1_approver,
+            l1_action_at=task.l1_approved_at,
+            l2_action_by=task.l2_approver,
+            l2_action_at=task.l2_approved_at,
+            l1_rejected_at=task.l1_rejected_at,
+            l2_rejected_at=task.l2_rejected_at,
         )
 
     def _get_client_ip(self, request):
@@ -163,7 +182,7 @@ class TaskListAPIView(APIView):
     def put(self, request, pk):
         task = self.get_object(pk)
         user = request.user
-        action = request.data.get('action') 
+        action = request.data.get('action')
         status_lower = (task.status.name or '').lower().strip() if task.status else ''
 
         # Capture old values
@@ -174,6 +193,8 @@ class TaskListAPIView(APIView):
             'bitrix_id': task.bitrix_id or "",
             'l1_approver_id': task.l1_approver_id,
             'l2_approver_id': task.l2_approver_id,
+            'l1_status': 'APPROVED' if task.l1_approved_at else ('REJECTED' if task.l1_rejected_at else None),
+            'l2_status': 'APPROVED' if task.l2_approved_at else ('REJECTED' if task.l2_rejected_at else None),
             'l1_approved_at': task.l1_approved_at.isoformat() if task.l1_approved_at else None,
             'l2_approved_at': task.l2_approved_at.isoformat() if task.l2_approved_at else None,
         }
@@ -200,9 +221,9 @@ class TaskListAPIView(APIView):
         if action == 'L1_APPROVE' and in_progress:
             if not task.l1_approver or task.l1_approver != user:
                 return Response({"error": "Only assigned L1 approver can approve"}, status=403)
-
             serializer.validated_data['l1_approver'] = user
             serializer.validated_data['l1_approved_at'] = timezone.now()
+            serializer.validated_data['l1_status'] = 'APPROVED'
             if task.user.second_level_manager:
                 serializer.validated_data['l2_approver'] = task.user.second_level_manager
             if status_lower == 'draft':
@@ -212,49 +233,51 @@ class TaskListAPIView(APIView):
         if action == 'L2_APPROVE' and completed:
             if not task.l2_approver or task.l2_approver != user:
                 return Response({"error": "Only assigned L2 approver can approve"}, status=403)
-
             serializer.validated_data['l2_approver'] = user
             serializer.validated_data['l2_approved_at'] = timezone.now()
+            serializer.validated_data['l2_status'] = 'APPROVED'
             serializer.validated_data['status'] = completed
 
-
+        # ----------------- SUBMIT -----------------
         if action == 'SUBMIT' and in_progress:
-
             if task.user != user:
                 return Response({"error": "Only task owner can submit"}, status=403)
-
             if not task.user.first_level_manager:
                 return Response({"error": "No reporting manager assigned"}, status=400)
-
             serializer.validated_data['status'] = in_progress
             serializer.validated_data['l1_approver'] = task.user.first_level_manager
+            serializer.validated_data['l1_status'] = None
+            serializer.validated_data['l2_status'] = None
 
         # ----------------- L1 Reject -----------------
         if action == 'L1_REJECT' and rejected:
             serializer.validated_data['status'] = rejected
             serializer.validated_data['l1_rejected_at'] = timezone.now()
-      
+            serializer.validated_data['l1_status'] = 'REJECTED'
 
         # ----------------- L2 Reject -----------------
         if action == 'L2_REJECT' and rejected:
             serializer.validated_data['status'] = rejected
             serializer.validated_data['l2_rejected_at'] = timezone.now()
-   
+            serializer.validated_data['l2_status'] = 'REJECTED'
 
-        # ----------------- Resubmit by Owner -----------------
+        # ----------------- RESUBMIT -----------------
         if action == 'RESUBMIT' and in_progress:
             if task.user != user:
                 return Response({"error": "Only task owner can resubmit"}, status=403)
-
             serializer.validated_data['status'] = in_progress
             serializer.validated_data['l1_approved_at'] = None
             serializer.validated_data['l2_approved_at'] = None
+            serializer.validated_data['l1_status'] = None
+            serializer.validated_data['l2_status'] = None
             serializer.validated_data['l1_approver'] = task.user.first_level_manager
             serializer.validated_data['l2_approver'] = task.user.second_level_manager
 
         # ----------------- Last Modified -----------------
         serializer.validated_data['last_modified_by'] = user
         updated_task = serializer.save()
+
+        # Capture new values
         new_values = {
             'status': updated_task.status.name if updated_task.status else None,
             'duration': str(updated_task.duration) if updated_task.duration is not None else None,
@@ -262,6 +285,9 @@ class TaskListAPIView(APIView):
             'bitrix_id': updated_task.bitrix_id or "",
             'l1_approver_id': updated_task.l1_approver_id,
             'l2_approver_id': updated_task.l2_approver_id,
+            # Derive L1/L2 status from timestamps
+            'l1_status': 'APPROVED' if updated_task.l1_approved_at else ('REJECTED' if updated_task.l1_rejected_at else None),
+            'l2_status': 'APPROVED' if updated_task.l2_approved_at else ('REJECTED' if updated_task.l2_rejected_at else None),
             'l1_approved_at': updated_task.l1_approved_at.isoformat() if updated_task.l1_approved_at else None,
             'l2_approved_at': updated_task.l2_approved_at.isoformat() if updated_task.l2_approved_at else None,
         }
@@ -358,6 +384,25 @@ class TaskListAuditLogAPIView(APIView):
         return Response(serializer.data)
 
 
+
+
+# class TaskListAuditLogAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def get(self, request, task_id=None):
+#         if task_id:
+#             task = get_object_or_404(TaskList, pk=task_id)
+#             if task.user != request.user and not request.user.is_staff:
+#                 raise PermissionDenied()
+#             logs = TaskListAuditLog.objects.filter(task=task).order_by('-created_at')
+#         else:
+#             if request.user.is_staff:
+#                 logs = TaskListAuditLog.objects.all().order_by('-created_at')
+#             else:
+#                 logs = TaskListAuditLog.objects.filter(task__user=request.user).order_by('-created_at')
+
+#         serializer = TaskListAuditLogSerializer(logs, many=True)
+#         return Response(serializer.data)
 
 class SimpleTimeLogView(APIView):
     """
@@ -1341,3 +1386,100 @@ class TaskApproveRejectAPIView(APIView):
         task.save()
 
         return Response({"message": f"{action.capitalize()}d successfully"})
+    
+class ApprovalStatusOverviewAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        view_type = request.query_params.get("view", "daily")  # daily, weekly, monthly
+
+        today = timezone.now().date()
+
+        # ---------------- DATE FILTER ----------------
+        if view_type == "daily":
+            queryset = TaskList.objects.filter(date=today)
+        elif view_type == "weekly":
+            start_date = today - timedelta(days=7)
+            queryset = TaskList.objects.filter(date__range=[start_date, today])
+        elif view_type == "monthly":
+            start_date = today - timedelta(days=30)
+            queryset = TaskList.objects.filter(date__range=[start_date, today])
+        else:
+            return Response({"error": "Invalid view"}, status=400)
+
+        # ---------------- APPROVER FILTER ----------------
+        # Only tasks where the user is first or second level approver
+        queryset = queryset.filter(Q(l1_approver=user) | Q(l2_approver=user))
+
+        # ---------------- AGGREGATE COUNTS ----------------
+        pending_count = queryset.filter(
+            Q(l1_approver=user, l1_approved_at__isnull=True, l1_rejected_at__isnull=True) |
+            Q(l2_approver=user, l2_approved_at__isnull=True, l2_rejected_at__isnull=True)
+        ).count()
+
+        approved_count = queryset.filter(
+            Q(l1_approver=user, l1_approved_at__isnull=False) |
+            Q(l2_approver=user, l2_approved_at__isnull=False)
+        ).count()
+
+        rejected_count = queryset.filter(
+            Q(l1_approver=user, l1_rejected_at__isnull=False) |
+            Q(l2_approver=user, l2_rejected_at__isnull=False)
+        ).count()
+
+        completed_count = queryset.filter(status__name__iexact="Completed").count()
+
+        total_count = pending_count + approved_count + rejected_count + completed_count
+
+        return Response({
+            "total": total_count,
+            "completed": completed_count,
+            "pending": pending_count,
+            "approved": approved_count,
+            "rejected": rejected_count,
+        })
+
+
+# class ApprovalStatusOverviewAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def get(self, request):
+#         user = request.user
+#         view_type = request.query_params.get("view", "daily")  # daily, weekly, monthly
+
+#         today = timezone.now().date()
+
+#         # ---------------- DATE FILTER ----------------
+#         if view_type == "daily":
+#             queryset = TaskList.objects.filter(date=today)
+#         elif view_type == "weekly":
+#             start_date = today - timedelta(days=7)
+#             queryset = TaskList.objects.filter(date__range=[start_date, today])
+#         elif view_type == "monthly":
+#             start_date = today - timedelta(days=30)
+#             queryset = TaskList.objects.filter(date__range=[start_date, today])
+#         else:
+#             return Response({"error": "Invalid view"}, status=400)
+
+#         # ---------------- APPROVER FILTER ----------------
+#         # Only show tasks assigned to or approved by this user
+#         if not user.is_staff:
+#             queryset = queryset.filter(
+#                 Q(l1_approver=user) | Q(l2_approver=user)
+#             )
+
+#         # ---------------- AGGREGATE BY STATUS ----------------
+#         total = queryset.count()
+#         completed = queryset.filter(status__name__iexact="Completed").count()
+#         pending = queryset.filter(status__name__iexact="In Progress").count()
+#         approved = queryset.filter(status__name__iexact="Approved").count()
+#         rejected = queryset.filter(status__name__iexact="Rejected").count()
+
+#         return Response({
+#             "total": total,
+#             "completed": completed,
+#             "pending": pending,
+#             "approved": approved,
+#             "rejected": rejected,
+#         })
