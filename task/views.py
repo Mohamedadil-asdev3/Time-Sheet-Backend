@@ -28,6 +28,270 @@ class IsOwnerOrStaffApprover(IsAuthenticated):
         return request.user.is_staff
 
 
+# class TaskListAPIView(APIView):
+#     serializer_class = TaskListSerializer
+
+#     def get_permissions(self):
+#         if self.request.method == 'GET':
+#             return [IsAuthenticated()]
+#         if self.request.method == 'POST':
+#             return [IsAuthenticated()]
+#         if self.request.method in ['PUT', 'DELETE']:
+#             return [IsOwnerOrStaffApprover()]
+#         return [IsAuthenticated()]
+
+#     def get_queryset(self):
+#         user = self.request.user
+#         queryset = TaskList.objects.select_related(
+#             'platform', 'task', 'subtask', 'status',
+#             'l1_approver', 'l2_approver', 'last_modified_by'
+#         ).order_by('-date', 'task__name')
+
+#         if not user.is_staff:
+#             queryset = queryset.filter(user=user)
+
+#         return queryset
+
+#     # def get_object(self, pk):
+#     #     task = get_object_or_404(TaskList, pk=pk)
+#     #     if task.user != self.request.user and not self.request.user.is_staff:
+#     #         raise PermissionDenied("You don't have permission to access this task.")
+#     #     return task
+#     def get_object(self, pk):
+#         task = get_object_or_404(TaskList, pk=pk)
+#         user = self.request.user
+
+#         if not (
+#             task.user == user or
+#             task.l1_approver_id == user.id or
+#             task.l2_approver_id == user.id or
+#             user.is_staff
+#         ):
+#             raise PermissionDenied("You don't have permission to access this task.")
+
+#         return task
+
+#     def _create_audit_log(self, task, action, old_values=None, new_values=None, remarks=None):
+#         TaskListAuditLog.objects.create(
+#             task=task,
+#             action=action,
+#             performed_by=self.request.user,
+#             old_values=old_values or {},
+#             new_values=new_values or {},
+#             remarks=remarks or '',
+#             ip_address=self._get_client_ip(self.request),
+#             user_agent=self.request.META.get('HTTP_USER_AGENT', '')
+#         )
+
+#     def _get_client_ip(self, request):
+#         x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+#         if x_forwarded_for:
+#             return x_forwarded_for.split(',')[0].strip()
+#         return request.META.get('REMOTE_ADDR', '')
+
+#     def apply_filters(self, request, queryset):
+#         params = request.query_params
+#         if params.get('user_id') and request.user.is_staff:
+#             queryset = queryset.filter(user_id=params['user_id'])
+#         if params.get('start_date'):
+#             queryset = queryset.filter(date__gte=params['start_date'])
+#         if params.get('end_date'):
+#             queryset = queryset.filter(date__lte=params['end_date'])
+#         if params.get('platform'):
+#             queryset = queryset.filter(platform_id=params['platform'])
+#         if params.get('task'):
+#             queryset = queryset.filter(task_id=params['task'])
+#         if params.get('status'):
+#             queryset = queryset.filter(status_id=params['status'])
+#         if search := params.get('search'):
+#             queryset = queryset.filter(
+#                 Q(description__icontains=search) |
+#                 Q(bitrix_id__icontains=search) |
+#                 Q(task__name__icontains=search) |
+#                 Q(subtask__name__icontains=search) |
+#                 Q(user__username__icontains=search)
+#             )
+#         return queryset
+
+#     def get(self, request, pk=None):
+#         if pk:
+#             task = self.get_object(pk)
+#             return Response(self.serializer_class(task).data)
+
+#         qs = self.get_queryset()
+#         qs = self.apply_filters(request, qs)
+#         return Response(self.serializer_class(qs, many=True).data)
+
+#     def post(self, request):
+#         if request.user.is_staff:
+#             return Response(
+#                 {"error": "Staff users cannot create tasks"},
+#                 status=status.HTTP_403_FORBIDDEN
+#             )
+
+#         data = request.data
+#         is_bulk = isinstance(data, list)
+
+#         serializer = self.serializer_class(
+#             data=data,
+#             many=is_bulk,
+#             context={'request': request}
+#         )
+
+#         if not serializer.is_valid():
+#             print("Create errors:", serializer.errors)
+#             return Response(serializer.errors, status=400)
+
+#         tasks = serializer.save()
+
+#         for task in (tasks if is_bulk else [tasks]):
+#             if task.user.first_level_manager:
+#                 task.l1_approver = task.user.first_level_manager
+#             if task.user.second_level_manager:
+#                 task.l2_approver = task.user.second_level_manager
+
+#             task.save()
+#             self._create_audit_log(
+#                 task=task,
+#                 action='CREATE',
+#                 new_values=self.serializer_class(task).data,
+#                 remarks="Bulk task created" if is_bulk else "Task created"
+#             )
+
+#         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+#     def put(self, request, pk):
+#         task = self.get_object(pk)
+#         user = request.user
+#         action = request.data.get('action') 
+#         status_lower = (task.status.name or '').lower().strip() if task.status else ''
+
+#         # Capture old values
+#         old_values = {
+#             'status': task.status.name if task.status else None,
+#             'duration': str(task.duration) if task.duration is not None else None,
+#             'description': task.description or "",
+#             'bitrix_id': task.bitrix_id or "",
+#             'l1_approver_id': task.l1_approver_id,
+#             'l2_approver_id': task.l2_approver_id,
+#             'l1_approved_at': task.l1_approved_at.isoformat() if task.l1_approved_at else None,
+#             'l2_approved_at': task.l2_approved_at.isoformat() if task.l2_approved_at else None,
+#         }
+
+#         serializer = self.serializer_class(
+#             task,
+#             data=request.data,
+#             partial=True,
+#             context={'request': request}
+#         )
+
+#         if not serializer.is_valid():
+#             return Response(serializer.errors, status=400)
+
+#         # Status objects
+#         in_progress = Status.objects.filter(name__iexact='In Progress').first() or \
+#                     Status.objects.filter(name__iexact='inprogress').first()
+#         completed = Status.objects.filter(name__iexact='Completed').first() or \
+#                     Status.objects.filter(name__iexact='Done').first()
+#         rejected = Status.objects.filter(name__iexact='Rejected').first()
+#         draft = Status.objects.filter(name__iexact='Draft').first()
+
+#         # ----------------- L1 Approve -----------------
+#         if action == 'L1_APPROVE' and in_progress:
+#             if not task.l1_approver or task.l1_approver != user:
+#                 return Response({"error": "Only assigned L1 approver can approve"}, status=403)
+
+#             serializer.validated_data['l1_approver'] = user
+#             serializer.validated_data['l1_approved_at'] = timezone.now()
+#             if task.user.second_level_manager:
+#                 serializer.validated_data['l2_approver'] = task.user.second_level_manager
+#             if status_lower == 'draft':
+#                 serializer.validated_data['status'] = in_progress
+
+#         # ----------------- L2 Approve -----------------
+#         if action == 'L2_APPROVE' and completed:
+#             if not task.l2_approver or task.l2_approver != user:
+#                 return Response({"error": "Only assigned L2 approver can approve"}, status=403)
+
+#             serializer.validated_data['l2_approver'] = user
+#             serializer.validated_data['l2_approved_at'] = timezone.now()
+#             serializer.validated_data['status'] = completed
+
+
+#         if action == 'SUBMIT' and in_progress:
+
+#             if task.user != user:
+#                 return Response({"error": "Only task owner can submit"}, status=403)
+
+#             if not task.user.first_level_manager:
+#                 return Response({"error": "No reporting manager assigned"}, status=400)
+
+#             serializer.validated_data['status'] = in_progress
+#             serializer.validated_data['l1_approver'] = task.user.first_level_manager
+
+#         # ----------------- L1 Reject -----------------
+#         if action == 'L1_REJECT' and rejected:
+#             serializer.validated_data['status'] = rejected
+#             serializer.validated_data['l1_rejected_at'] = timezone.now()
+      
+
+#         # ----------------- L2 Reject -----------------
+#         if action == 'L2_REJECT' and rejected:
+#             serializer.validated_data['status'] = rejected
+#             serializer.validated_data['l2_rejected_at'] = timezone.now()
+   
+
+#         # ----------------- Resubmit by Owner -----------------
+#         if action == 'RESUBMIT' and in_progress:
+#             if task.user != user:
+#                 return Response({"error": "Only task owner can resubmit"}, status=403)
+
+#             serializer.validated_data['status'] = in_progress
+#             serializer.validated_data['l1_approved_at'] = None
+#             serializer.validated_data['l2_approved_at'] = None
+#             serializer.validated_data['l1_approver'] = task.user.first_level_manager
+#             serializer.validated_data['l2_approver'] = task.user.second_level_manager
+
+#         # ----------------- Last Modified -----------------
+#         serializer.validated_data['last_modified_by'] = user
+#         updated_task = serializer.save()
+#         new_values = {
+#             'status': updated_task.status.name if updated_task.status else None,
+#             'duration': str(updated_task.duration) if updated_task.duration is not None else None,
+#             'description': updated_task.description or "",
+#             'bitrix_id': updated_task.bitrix_id or "",
+#             'l1_approver_id': updated_task.l1_approver_id,
+#             'l2_approver_id': updated_task.l2_approver_id,
+#             'l1_approved_at': updated_task.l1_approved_at.isoformat() if updated_task.l1_approved_at else None,
+#             'l2_approved_at': updated_task.l2_approved_at.isoformat() if updated_task.l2_approved_at else None,
+#         }
+
+#         log_action = action if action in ['L1_APPROVE', 'L2_APPROVE', 'L1_REJECT', 'L2_REJECT', 'RESUBMIT'] else 'UPDATE'
+#         remarks = request.data.get('remarks', f"Task {log_action.lower()}d")
+#         self._create_audit_log(
+#             task=updated_task,
+#             action=log_action,
+#             old_values=old_values,
+#             new_values=new_values,
+#             remarks=remarks
+#         )
+
+#         return Response(serializer.data)
+
+#     def delete(self, request, pk):
+#         task = self.get_object(pk)
+#         status_name = (task.status.name or '').lower().strip() if task.status else ''
+#         if task.user != request.user or status_name != 'draft':
+#             return Response({"error": "Only owner can delete draft tasks"}, status=403)
+
+#         self._create_audit_log(
+#             task=task,
+#             action='DELETE',
+#             old_values={'id': task.id, 'task_name': task.task.name if task.task else None},
+#             remarks="Deleted by owner"
+#         )
+#         task.delete()
+#         return Response(status=status.HTTP_204_NO_CONTENT)
 class TaskListAPIView(APIView):
     serializer_class = TaskListSerializer
 
@@ -44,23 +308,30 @@ class TaskListAPIView(APIView):
         user = self.request.user
         queryset = TaskList.objects.select_related(
             'platform', 'task', 'subtask', 'status',
-            'l1_approver', 'l2_approver', 'last_modified_by'
+            'l1_approver', 'l2_approver', 'last_modified_by', 'user'
         ).order_by('-date', 'task__name')
 
-        if not user.is_staff:
-            queryset = queryset.filter(user=user)
-
+        # Staff can see all tasks
+        if user.is_staff:
+            return queryset
+        
+        # Non-staff users can see:
+        # - Tasks they own
+        # - Tasks where they are L1 approver
+        # - Tasks where they are L2 approver
+        queryset = queryset.filter(
+            Q(user=user) |
+            Q(l1_approver=user) |
+            Q(l2_approver=user)
+        )
+        
         return queryset
 
-    # def get_object(self, pk):
-    #     task = get_object_or_404(TaskList, pk=pk)
-    #     if task.user != self.request.user and not self.request.user.is_staff:
-    #         raise PermissionDenied("You don't have permission to access this task.")
-    #     return task
     def get_object(self, pk):
         task = get_object_or_404(TaskList, pk=pk)
         user = self.request.user
 
+        # Check if user has permission to access this task
         if not (
             task.user == user or
             task.l1_approver_id == user.id or
@@ -110,18 +381,26 @@ class TaskListAPIView(APIView):
 
     def apply_filters(self, request, queryset):
         params = request.query_params
+        
+        # Staff can filter by user_id
         if params.get('user_id') and request.user.is_staff:
             queryset = queryset.filter(user_id=params['user_id'])
+        
+        # Date filters
         if params.get('start_date'):
             queryset = queryset.filter(date__gte=params['start_date'])
         if params.get('end_date'):
             queryset = queryset.filter(date__lte=params['end_date'])
+        
+        # Other filters
         if params.get('platform'):
             queryset = queryset.filter(platform_id=params['platform'])
         if params.get('task'):
             queryset = queryset.filter(task_id=params['task'])
         if params.get('status'):
             queryset = queryset.filter(status_id=params['status'])
+        
+        # Search filter
         if search := params.get('search'):
             queryset = queryset.filter(
                 Q(description__icontains=search) |
@@ -130,6 +409,7 @@ class TaskListAPIView(APIView):
                 Q(subtask__name__icontains=search) |
                 Q(user__username__icontains=search)
             )
+        
         return queryset
 
     def get(self, request, pk=None):
@@ -139,7 +419,12 @@ class TaskListAPIView(APIView):
 
         qs = self.get_queryset()
         qs = self.apply_filters(request, qs)
-        return Response(self.serializer_class(qs, many=True).data)
+        
+        # Debug: Print count
+        print(f"Total tasks found: {qs.count()}")
+        
+        serializer = self.serializer_class(qs, many=True)
+        return Response(serializer.data)
 
     def post(self, request):
         if request.user.is_staff:
@@ -209,7 +494,7 @@ class TaskListAPIView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=400)
 
-        # Status objects
+        # Get status objects
         in_progress = Status.objects.filter(name__iexact='In Progress').first() or \
                     Status.objects.filter(name__iexact='inprogress').first()
         completed = Status.objects.filter(name__iexact='Completed').first() or \
@@ -239,6 +524,7 @@ class TaskListAPIView(APIView):
             serializer.validated_data['status'] = completed
 
         # ----------------- SUBMIT -----------------
+        # ----------------- Submit -----------------
         if action == 'SUBMIT' and in_progress:
             if task.user != user:
                 return Response({"error": "Only task owner can submit"}, status=403)
@@ -251,12 +537,17 @@ class TaskListAPIView(APIView):
 
         # ----------------- L1 Reject -----------------
         if action == 'L1_REJECT' and rejected:
+            if not task.l1_approver or task.l1_approver != user:
+                return Response({"error": "Only assigned L1 approver can reject"}, status=403)
             serializer.validated_data['status'] = rejected
             serializer.validated_data['l1_rejected_at'] = timezone.now()
             serializer.validated_data['l1_status'] = 'REJECTED'
 
+      
         # ----------------- L2 Reject -----------------
         if action == 'L2_REJECT' and rejected:
+            if not task.l2_approver or task.l2_approver != user:
+                return Response({"error": "Only assigned L2 approver can reject"}, status=403)
             serializer.validated_data['status'] = rejected
             serializer.validated_data['l2_rejected_at'] = timezone.now()
             serializer.validated_data['l2_status'] = 'REJECTED'
@@ -276,8 +567,7 @@ class TaskListAPIView(APIView):
         # ----------------- Last Modified -----------------
         serializer.validated_data['last_modified_by'] = user
         updated_task = serializer.save()
-
-        # Capture new values
+        
         new_values = {
             'status': updated_task.status.name if updated_task.status else None,
             'duration': str(updated_task.duration) if updated_task.duration is not None else None,
@@ -294,6 +584,7 @@ class TaskListAPIView(APIView):
 
         log_action = action if action in ['L1_APPROVE', 'L2_APPROVE', 'L1_REJECT', 'L2_REJECT', 'RESUBMIT'] else 'UPDATE'
         remarks = request.data.get('remarks', f"Task {log_action.lower()}d")
+        
         self._create_audit_log(
             task=updated_task,
             action=log_action,
@@ -318,7 +609,6 @@ class TaskListAPIView(APIView):
         )
         task.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
-
 
 class TaskApprovalAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -1483,3 +1773,1103 @@ class ApprovalStatusOverviewAPIView(APIView):
 #             "approved": approved,
 #             "rejected": rejected,
 #         })
+    
+    
+    from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django.db.models import Count, Q
+from django.utils import timezone
+from datetime import datetime, timedelta
+from collections import OrderedDict
+
+class TaskStatusOverviewAPIView(APIView):
+    """
+    API View to get task status overview with counts and percentages
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        queryset = TaskList.objects.select_related('status', 'user', 'l1_approver', 'l2_approver')
+        
+        # Staff can see all tasks
+        if user.is_staff:
+            return queryset
+        
+        # Non-staff users see their own tasks and tasks they approve
+        return queryset.filter(
+            Q(user=user) |
+            Q(l1_approver=user) |
+            Q(l2_approver=user)
+        )
+    
+    def apply_filters(self, request, queryset):
+        """Apply additional filters"""
+        params = request.query_params
+        
+        # Staff can filter by user_id
+        if params.get('user_id') and request.user.is_staff:
+            queryset = queryset.filter(user_id=params['user_id'])
+        
+        # Platform filter
+        if params.get('platform'):
+            queryset = queryset.filter(platform_id=params['platform'])
+        
+        # Task filter
+        if params.get('task'):
+            queryset = queryset.filter(task_id=params['task'])
+        
+        # Specific status filter
+        if params.get('status'):
+            queryset = queryset.filter(status_id=params['status'])
+        
+        return queryset
+    
+    def get_date_range(self, period, reference_date=None):
+        """Get start and end date based on period"""
+        if reference_date is None:
+            reference_date = timezone.now().date()
+        else:
+            reference_date = datetime.strptime(reference_date, '%Y-%m-%d').date()
+        
+        if period == 'today':
+            start_date = reference_date
+            end_date = reference_date
+            period_name = reference_date.strftime('%Y-%m-%d')
+            
+        elif period == 'week':
+            # Current week (Monday to Sunday)
+            start_date = reference_date - timedelta(days=reference_date.weekday())
+            end_date = start_date + timedelta(days=6)
+            period_name = f"Week {reference_date.isocalendar()[1]}, {reference_date.year}"
+            
+        elif period == 'month':
+            # Current month
+            start_date = reference_date.replace(day=1)
+            if reference_date.month == 12:
+                end_date = reference_date.replace(year=reference_date.year + 1, month=1, day=1) - timedelta(days=1)
+            else:
+                end_date = reference_date.replace(month=reference_date.month + 1, day=1) - timedelta(days=1)
+            period_name = reference_date.strftime('%B %Y')
+            
+        elif period == 'year':
+            # Current year
+            start_date = reference_date.replace(month=1, day=1)
+            end_date = reference_date.replace(month=12, day=31)
+            period_name = str(reference_date.year)
+            
+        else:
+            # Default to month
+            start_date = reference_date.replace(day=1)
+            if reference_date.month == 12:
+                end_date = reference_date.replace(year=reference_date.year + 1, month=1, day=1) - timedelta(days=1)
+            else:
+                end_date = reference_date.replace(month=reference_date.month + 1, day=1) - timedelta(days=1)
+            period_name = reference_date.strftime('%B %Y')
+        
+        return start_date, end_date, period_name
+    
+    def calculate_status_breakdown(self, queryset, total_count):
+        """Calculate status breakdown with counts and percentages"""
+        status_counts = queryset.values('status__name', 'status__id').annotate(
+            count=Count('id')
+        ).order_by('-count')
+        
+        breakdown = {}
+        for item in status_counts:
+            status_name = item['status__name'] or 'Unknown'
+            count = item['count']
+            percentage = (count / total_count * 100) if total_count > 0 else 0
+            
+            breakdown[status_name] = {
+                'count': count,
+                'percentage': round(percentage, 2),
+                'status_id': item['status__id']
+            }
+        
+        return breakdown
+    
+    def get(self, request):
+        """
+        Get task status overview
+        Query Parameters:
+            - period: today, week, month, year (default: month)
+            - date: specific date in YYYY-MM-DD format (default: current date)
+            - user_id: filter by user (staff only)
+            - platform: filter by platform ID
+            - task: filter by task ID
+            - status: filter by status ID
+        """
+        params = request.query_params
+        period = params.get('period', 'month').lower()
+        date_param = params.get('date')
+        
+        # Get base queryset with permissions
+        queryset = self.get_queryset()
+        
+        # Apply additional filters
+        queryset = self.apply_filters(request, queryset)
+        
+        # Get date range for the period
+        start_date, end_date, period_name = self.get_date_range(period, date_param)
+        
+        # Filter by date range
+        queryset = queryset.filter(date__gte=start_date, date__lte=end_date)
+        
+        # Get total count for the period
+        total_count = queryset.count()
+        
+        # Calculate status breakdown
+        status_breakdown = self.calculate_status_breakdown(queryset, total_count)
+        
+        # Prepare response data
+        response_data = {
+            'period': period_name,
+            'date_range': {
+                'start': start_date,
+                'end': end_date
+            },
+            'total_tasks': total_count,
+            'status_breakdown': status_breakdown,
+            'filters_applied': {
+                'period': period,
+                'date': date_param if date_param else 'current',
+                'platform': params.get('platform'),
+                'task': params.get('task'),
+                'status': params.get('status'),
+                'user_id': params.get('user_id') if request.user.is_staff else None
+            }
+        }
+        
+        return Response(response_data)
+
+
+class MultiPeriodTaskStatusOverviewAPIView(APIView):
+    """
+    API View to get task status overview for multiple periods at once
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """
+        Get overview for multiple periods: this month, this week, this year
+        Query Parameters:
+            - user_id: filter by user (staff only)
+            - platform: filter by platform ID
+            - task: filter by task ID
+            - status: filter by status ID
+        """
+        params = request.query_params
+        today = timezone.now().date()
+        
+        # Get base queryset with permissions
+        queryset = TaskList.objects.select_related('status')
+        
+        user = request.user
+        if not user.is_staff:
+            queryset = queryset.filter(
+                Q(user=user) |
+                Q(l1_approver=user) |
+                Q(l2_approver=user)
+            )
+        
+        # Apply filters
+        if params.get('user_id') and user.is_staff:
+            queryset = queryset.filter(user_id=params['user_id'])
+        if params.get('platform'):
+            queryset = queryset.filter(platform_id=params['platform'])
+        if params.get('task'):
+            queryset = queryset.filter(task_id=params['task'])
+        if params.get('status'):
+            queryset = queryset.filter(status_id=params['status'])
+        
+        # Define periods
+        periods = {
+            'today': {
+                'start': today,
+                'end': today,
+                'label': today.strftime('%Y-%m-%d')
+            },
+            'week': {
+                'start': today - timedelta(days=today.weekday()),
+                'end': today - timedelta(days=today.weekday()) + timedelta(days=6),
+                'label': f"Week {today.isocalendar()[1]}, {today.year}"
+            },
+            'month': {
+                'start': today.replace(day=1),
+                'end': (today.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1),
+                'label': today.strftime('%B %Y')
+            },
+            'year': {
+                'start': today.replace(month=1, day=1),
+                'end': today.replace(month=12, day=31),
+                'label': str(today.year)
+            }
+        }
+        
+        # Calculate overview for each period
+        overview = OrderedDict()
+        for period_key, period_info in periods.items():
+            period_queryset = queryset.filter(
+                date__gte=period_info['start'],
+                date__lte=period_info['end']
+            )
+            
+            total_count = period_queryset.count()
+            
+            # Calculate status breakdown
+            status_counts = period_queryset.values('status__name').annotate(
+                count=Count('id')
+            ).order_by('-count')
+            
+            status_breakdown = {}
+            for item in status_counts:
+                status_name = item['status__name'] or 'Unknown'
+                count = item['count']
+                percentage = (count / total_count * 100) if total_count > 0 else 0
+                
+                status_breakdown[status_name] = {
+                    'count': count,
+                    'percentage': round(percentage, 2)
+                }
+            
+            overview[period_key] = {
+                'label': period_info['label'],
+                'date_range': {
+                    'start': period_info['start'],
+                    'end': period_info['end']
+                },
+                'total_tasks': total_count,
+                'status_breakdown': status_breakdown
+            }
+        
+        # Add summary
+        summary = {
+            'most_active_period': max(overview.items(), key=lambda x: x[1]['total_tasks'])[0] if overview else None,
+            'highest_completion_rate': None
+        }
+        
+        # Calculate completion rate
+        for period_key, period_data in overview.items():
+            if 'Completed' in period_data['status_breakdown']:
+                completion_rate = period_data['status_breakdown']['Completed']['percentage']
+                if summary['highest_completion_rate'] is None or completion_rate > summary['highest_completion_rate'][1]:
+                    summary['highest_completion_rate'] = (period_key, completion_rate)
+        
+        response_data = {
+            'overview': overview,
+            'summary': summary,
+            'filters_applied': {
+                'user_id': params.get('user_id') if user.is_staff else None,
+                'platform': params.get('platform'),
+                'task': params.get('task'),
+                'status': params.get('status')
+            }
+        }
+        
+        return Response(response_data)
+    
+    
+# class TaskCountsAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+    
+#     def get(self, request):
+#         user = request.user
+        
+#         # Get current date for "today" calculations
+#         today = timezone.now().date()
+#         today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+#         today_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
+        
+#         # Base queryset based on user permissions
+#         if user.is_staff:
+#             queryset = TaskList.objects.select_related('status')
+#         else:
+#             # Non-staff users can see:
+#             # - Tasks they own
+#             # - Tasks where they are L1 approver
+#             # - Tasks where they are L2 approver
+#             queryset = TaskList.objects.select_related('status').filter(
+#                 Q(user=user) |
+#                 Q(l1_approver=user) |
+#                 Q(l2_approver=user)
+#             )
+        
+#         # Get status objects
+#         in_progress_status = Status.objects.filter(name__iexact='In Progress').first() or \
+#                             Status.objects.filter(name__iexact='inprogress').first()
+#         completed_status = Status.objects.filter(name__iexact='Completed').first() or \
+#                           Status.objects.filter(name__iexact='Done').first()
+#         rejected_status = Status.objects.filter(name__iexact='Rejected').first()
+#         draft_status = Status.objects.filter(name__iexact='Draft').first()
+        
+#         # Calculate Total Hours (sum of duration for all tasks)
+#         total_hours = queryset.aggregate(total=Sum('duration'))['total'] or 0
+        
+#         # Calculate Today Hours (sum of duration for tasks created today)
+#         today_hours = queryset.filter(
+#             date__range=[today_start, today_end]
+#         ).aggregate(total=Sum('duration'))['total'] or 0
+        
+#         # Calculate Total Task (count of all tasks)
+#         total_tasks = queryset.count()
+        
+#         # Calculate Submitted tasks (tasks that have been submitted/in progress)
+#         submitted_tasks = 0
+#         if in_progress_status:
+#             submitted_tasks = queryset.filter(status=in_progress_status).count()
+        
+#         # Calculate Pending Approval tasks
+#         pending_approval_tasks = 0
+#         if user.is_staff:
+#             # For staff: count tasks where either L1 or L2 approval is pending
+#             pending_approval_tasks = queryset.filter(
+#                 Q(l1_approved_at__isnull=True, l1_approver__isnull=False) |
+#                 Q(l2_approved_at__isnull=True, l2_approver__isnull=False)
+#             ).exclude(
+#                 Q(l1_rejected_at__isnull=False) | Q(l2_rejected_at__isnull=False)
+#             ).count()
+#         else:
+#             # For non-staff: count tasks where user is approver and approval is pending
+#             pending_approval_tasks = queryset.filter(
+#                 Q(l1_approver=user, l1_approved_at__isnull=True, l1_rejected_at__isnull=True) |
+#                 Q(l2_approver=user, l2_approved_at__isnull=True, l2_rejected_at__isnull=True)
+#             ).count()
+        
+#         # Calculate Rejected tasks
+#         rejected_tasks = 0
+#         if rejected_status:
+#             rejected_tasks = queryset.filter(status=rejected_status).count()
+        
+#         # Additional counts that might be useful
+#         # Completed tasks (if needed)
+#         completed_tasks = 0
+#         if completed_status:
+#             completed_tasks = queryset.filter(status=completed_status).count()
+        
+#         # Draft tasks
+#         draft_tasks = 0
+#         if draft_status:
+#             draft_tasks = queryset.filter(status=draft_status).count()
+        
+#         # Format duration (convert hours to decimal if needed)
+#         def format_hours(hours):
+#             if hours is None:
+#                 return 0
+#             return float(hours)
+        
+#         response_data = {
+#             "total_hours": format_hours(total_hours),
+#             "today_hours": format_hours(today_hours),
+#             "total_tasks": total_tasks,
+#             "submitted_tasks": submitted_tasks,
+#             "pending_approval_tasks": pending_approval_tasks,
+#             "rejected_tasks": rejected_tasks,
+#             # Optional additional counts
+#             "completed_tasks": completed_tasks,
+#             "draft_tasks": draft_tasks,
+#         }
+        
+#         # Add filter parameters if needed
+#         # Apply date filters if provided
+#         start_date = request.query_params.get('start_date')
+#         end_date = request.query_params.get('end_date')
+        
+#         if start_date or end_date:
+#             filtered_queryset = queryset
+#             if start_date:
+#                 filtered_queryset = filtered_queryset.filter(date__gte=start_date)
+#             if end_date:
+#                 filtered_queryset = filtered_queryset.filter(date__lte=end_date)
+            
+#             response_data["filtered"] = {
+#                 "total_hours": filtered_queryset.aggregate(total=Sum('duration'))['total'] or 0,
+#                 "total_tasks": filtered_queryset.count(),
+#                 "submitted_tasks": filtered_queryset.filter(status=in_progress_status).count() if in_progress_status else 0,
+#                 "rejected_tasks": filtered_queryset.filter(status=rejected_status).count() if rejected_status else 0,
+#             }
+        
+#         return Response(response_data, status=status.HTTP_200_OK)
+class TaskCountsAPIView(APIView):
+        permission_classes = [IsAuthenticated]
+        
+        def get(self, request):
+            user = request.user
+            
+            # Get current date for "today" calculations
+            today = timezone.now().date()
+            today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+            today_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
+            
+            # Base queryset based on user permissions
+            if user.is_staff:
+                all_tasks_queryset = TaskList.objects.select_related('status')
+            else:
+                # All tasks that user can see (owned or approver)
+                all_tasks_queryset = TaskList.objects.select_related('status').filter(
+                    Q(user=user) |
+                    Q(l1_approver=user) |
+                    Q(l2_approver=user)
+                )
+            
+            # Tasks where user is the owner
+            owned_tasks_queryset = TaskList.objects.select_related('status').filter(user=user)
+            
+            # Tasks where user is L1 approver
+            l1_approver_tasks_queryset = TaskList.objects.select_related('status').filter(l1_approver=user)
+            
+            # Tasks where user is L2 approver
+            l2_approver_tasks_queryset = TaskList.objects.select_related('status').filter(l2_approver=user)
+            
+            # Get status objects
+            in_progress_status = Status.objects.filter(name__iexact='In Progress').first() or \
+                                Status.objects.filter(name__iexact='inprogress').first()
+            completed_status = Status.objects.filter(name__iexact='Completed').first() or \
+                            Status.objects.filter(name__iexact='Done').first()
+            rejected_status = Status.objects.filter(name__iexact='Rejected').first()
+            draft_status = Status.objects.filter(name__iexact='Draft').first()
+            
+            # ============== NORMAL COUNTS (All accessible tasks) ==============
+            normal_counts = self._get_normal_counts(
+                all_tasks_queryset, 
+                in_progress_status, 
+                completed_status, 
+                rejected_status, 
+                draft_status,
+                today_start,
+                today_end
+            )
+            
+            # ============== APPROVER COUNTS (Based on user role) ==============
+            approver_counts = self._get_approver_counts(
+                user,
+                owned_tasks_queryset,
+                l1_approver_tasks_queryset,
+                l2_approver_tasks_queryset,
+                in_progress_status,
+                completed_status,
+                rejected_status,
+                draft_status,
+                today_start,
+                today_end
+            )
+            
+            # ============== PENDING APPROVAL COUNTS (Tasks waiting for user's approval) ==============
+            pending_approval_counts = self._get_pending_approval_counts(
+                user,
+                l1_approver_tasks_queryset,
+                l2_approver_tasks_queryset,
+                in_progress_status
+            )
+            
+            # Combine all data
+            response_data = {
+                "user": {
+                    "id": user.id,
+                    "name":  user.firstname,
+                    "email": user.email,
+                    "is_staff": user.is_staff
+                },
+                "normal_counts": normal_counts,
+                "approver_counts": approver_counts,
+                "pending_approval": pending_approval_counts
+            }
+            
+            return Response(response_data, status=http_status.HTTP_200_OK)
+        
+        def _get_normal_counts(self, queryset, in_progress_status, completed_status, rejected_status, draft_status, today_start, today_end):
+            """Get normal counts for all accessible tasks"""
+            
+            def format_hours(hours):
+                return float(hours) if hours else 0
+            
+            # Calculate counts
+            total_hours = queryset.aggregate(total=Sum('duration'))['total'] or 0
+            today_hours = queryset.filter(date__range=[today_start, today_end]).aggregate(total=Sum('duration'))['total'] or 0
+            total_tasks = queryset.count()
+            
+            submitted_tasks = 0
+            if in_progress_status:
+                submitted_tasks = queryset.filter(status=in_progress_status).count()
+            
+            completed_tasks = 0
+            if completed_status:
+                completed_tasks = queryset.filter(status=completed_status).count()
+            
+            rejected_tasks = 0
+            if rejected_status:
+                rejected_tasks = queryset.filter(status=rejected_status).count()
+            
+            draft_tasks = 0
+            if draft_status:
+                draft_tasks = queryset.filter(status=draft_status).count()
+            
+            # Calculate completion percentage
+            completion_percentage = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0
+            
+            return {
+                "total_hours": format_hours(total_hours),
+                "today_hours": format_hours(today_hours),
+                "total_tasks": total_tasks,
+                "submitted_tasks": submitted_tasks,
+                "completed_tasks": completed_tasks,
+                "rejected_tasks": rejected_tasks,
+                "draft_tasks": draft_tasks,
+                "completion_percentage": round(completion_percentage, 2)
+            }
+        
+        def _get_approver_counts(self, user, owned_tasks, l1_tasks, l2_tasks, in_progress_status, completed_status, rejected_status, draft_status, today_start, today_end):
+            """Get counts based on user role (owner, L1 approver, L2 approver)"""
+            
+            def format_hours(hours):
+                return float(hours) if hours else 0
+            
+            # Owned tasks counts
+            owned_hours = owned_tasks.aggregate(total=Sum('duration'))['total'] or 0
+            owned_today_hours = owned_tasks.filter(date__range=[today_start, today_end]).aggregate(total=Sum('duration'))['total'] or 0
+            owned_total = owned_tasks.count()
+            
+            owned_completed = 0
+            if completed_status:
+                owned_completed = owned_tasks.filter(status=completed_status).count()
+            
+            owned_submitted = 0
+            if in_progress_status:
+                owned_submitted = owned_tasks.filter(status=in_progress_status).count()
+            
+            owned_rejected = 0
+            if rejected_status:
+                owned_rejected = owned_tasks.filter(status=rejected_status).count()
+            
+            owned_draft = 0
+            if draft_status:
+                owned_draft = owned_tasks.filter(status=draft_status).count()
+            
+            # L1 Approver tasks counts
+            l1_hours = l1_tasks.aggregate(total=Sum('duration'))['total'] or 0
+            l1_today_hours = l1_tasks.filter(date__range=[today_start, today_end]).aggregate(total=Sum('duration'))['total'] or 0
+            l1_total = l1_tasks.count()
+            
+            l1_completed = 0
+            if completed_status:
+                l1_completed = l1_tasks.filter(status=completed_status).count()
+            
+            l1_pending = l1_tasks.filter(l1_approved_at__isnull=True, l1_rejected_at__isnull=True).count()
+            
+            # L2 Approver tasks counts
+            l2_hours = l2_tasks.aggregate(total=Sum('duration'))['total'] or 0
+            l2_today_hours = l2_tasks.filter(date__range=[today_start, today_end]).aggregate(total=Sum('duration'))['total'] or 0
+            l2_total = l2_tasks.count()
+            
+            l2_completed = 0
+            if completed_status:
+                l2_completed = l2_tasks.filter(status=completed_status).count()
+            
+            l2_pending = l2_tasks.filter(l2_approved_at__isnull=True, l2_rejected_at__isnull=True).count()
+            
+            return {
+                "as_owner": {
+                    "total_hours": format_hours(owned_hours),
+                    "today_hours": format_hours(owned_today_hours),
+                    "total_tasks": owned_total,
+                    "submitted_tasks": owned_submitted,
+                    "completed_tasks": owned_completed,
+                    "rejected_tasks": owned_rejected,
+                    "draft_tasks": owned_draft,
+                    "completion_percentage": round((owned_completed / owned_total * 100), 2) if owned_total > 0 else 0
+                },
+                "as_l1_approver": {
+                    "total_hours": format_hours(l1_hours),
+                    "today_hours": format_hours(l1_today_hours),
+                    "total_tasks": l1_total,
+                    "completed_tasks": l1_completed,
+                    "pending_approval": l1_pending,
+                    "completion_percentage": round((l1_completed / l1_total * 100), 2) if l1_total > 0 else 0
+                },
+                "as_l2_approver": {
+                    "total_hours": format_hours(l2_hours),
+                    "today_hours": format_hours(l2_today_hours),
+                    "total_tasks": l2_total,
+                    "completed_tasks": l2_completed,
+                    "pending_approval": l2_pending,
+                    "completion_percentage": round((l2_completed / l2_total * 100), 2) if l2_total > 0 else 0
+                }
+            }
+        
+        def _get_pending_approval_counts(self, user, l1_tasks, l2_tasks, in_progress_status):
+            """Get tasks pending approval for the current user"""
+            
+            # Tasks pending L1 approval
+            pending_l1_approval = l1_tasks.filter(
+                l1_approved_at__isnull=True,
+                l1_rejected_at__isnull=True,
+                status=in_progress_status
+            ).count() if in_progress_status else 0
+            
+            # Tasks pending L2 approval
+            pending_l2_approval = l2_tasks.filter(
+                l2_approved_at__isnull=True,
+                l2_rejected_at__isnull=True,
+                status=in_progress_status
+            ).count() if in_progress_status else 0
+            
+            # Get pending tasks details (optional)
+            pending_l1_tasks = l1_tasks.filter(
+                l1_approved_at__isnull=True,
+                l1_rejected_at__isnull=True,
+                status=in_progress_status
+            ).select_related('user', 'task', 'subtask').order_by('-date')[:10]
+            
+            pending_l2_tasks = l2_tasks.filter(
+                l2_approved_at__isnull=True,
+                l2_rejected_at__isnull=True,
+                status=in_progress_status
+            ).select_related('user', 'task', 'subtask').order_by('-date')[:10]
+            
+            return {
+                "summary": {
+                    "total_pending": pending_l1_approval + pending_l2_approval,
+                    "pending_l1_approval": pending_l1_approval,
+                    "pending_l2_approval": pending_l2_approval
+                },
+                "l1_pending_tasks": [
+                    {
+                        "id": task.id,
+                        "task_name": task.task.name if task.task else None,
+                        "subtask_name": task.subtask.name if task.subtask else None,
+                        "description": task.description,
+                        "duration": float(task.duration) if task.duration else 0,
+                        "user": task.user.get_full_name() or task.user.username,
+                        "date": task.date.strftime('%Y-%m-%d'),
+                        "bitrix_id": task.bitrix_id
+                    }
+                    for task in pending_l1_tasks
+                ],
+                "l2_pending_tasks": [
+                    {
+                        "id": task.id,
+                        "task_name": task.task.name if task.task else None,
+                        "subtask_name": task.subtask.name if task.subtask else None,
+                        "description": task.description,
+                        "duration": float(task.duration) if task.duration else 0,
+                        "user": task.user.get_full_name() or task.user.username,
+                        "date": task.date.strftime('%Y-%m-%d'),
+                        "bitrix_id": task.bitrix_id
+                    }
+                    for task in pending_l2_tasks
+                ]
+            }   
+from rest_framework import status as http_status  # Rename to avoid conflict
+
+class TaskStatusOverviewAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        user = request.user
+        
+        # Get time filter parameter
+        time_filter = request.query_params.get('time_filter', 'all')  # all, day, week, month
+        specific_date = request.query_params.get('date')  # For specific date (YYYY-MM-DD)
+        
+        # Base queryset based on user permissions
+        if user.is_staff:
+            base_queryset = TaskList.objects.select_related('status')
+        else:
+            base_queryset = TaskList.objects.select_related('status').filter(
+                Q(user=user) |
+                Q(l1_approver=user) |
+                Q(l2_approver=user)
+            )
+        
+        # Apply time-based filters
+        today = timezone.now().date()
+        
+        if specific_date:
+            # Filter by specific date
+            specific_date_obj = datetime.strptime(specific_date, '%Y-%m-%d').date()
+            date_start = timezone.make_aware(datetime.combine(specific_date_obj, datetime.min.time()))
+            date_end = timezone.make_aware(datetime.combine(specific_date_obj, datetime.max.time()))
+            base_queryset = base_queryset.filter(date__range=[date_start, date_end])
+        elif time_filter == 'day':
+            # Today's tasks
+            date_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+            date_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
+            base_queryset = base_queryset.filter(date__range=[date_start, date_end])
+        elif time_filter == 'week':
+            # Current week (Monday to Sunday)
+            start_of_week = today - timedelta(days=today.weekday())
+            end_of_week = start_of_week + timedelta(days=6)
+            week_start = timezone.make_aware(datetime.combine(start_of_week, datetime.min.time()))
+            week_end = timezone.make_aware(datetime.combine(end_of_week, datetime.max.time()))
+            base_queryset = base_queryset.filter(date__range=[week_start, week_end])
+        elif time_filter == 'month':
+            # Current month
+            start_of_month = today.replace(day=1)
+            if today.month == 12:
+                end_of_month = today.replace(year=today.year+1, month=1, day=1) - timedelta(days=1)
+            else:
+                end_of_month = today.replace(month=today.month+1, day=1) - timedelta(days=1)
+            month_start = timezone.make_aware(datetime.combine(start_of_month, datetime.min.time()))
+            month_end = timezone.make_aware(datetime.combine(end_of_month, datetime.max.time()))
+            base_queryset = base_queryset.filter(date__range=[month_start, month_end])
+        
+        # Get all status objects from master.models
+        all_statuses = Status.objects.all()
+        
+        # Calculate total tasks count
+        total_tasks = base_queryset.count()
+        
+        # Calculate counts and percentages for each status
+        status_overview = []
+        
+        for status_obj in all_statuses:
+            status_count = base_queryset.filter(status=status_obj).count()
+            percentage = (status_count / total_tasks * 100) if total_tasks > 0 else 0
+            
+            status_overview.append({
+                "status_id": status_obj.id,
+                "status_name": status_obj.name,
+                "count": status_count,
+                "percentage": round(percentage, 2),
+                "formatted_percentage": f"{round(percentage, 2)}%"
+            })
+        
+        # Sort by count in descending order
+        status_overview.sort(key=lambda x: x['count'], reverse=True)
+        
+        # Get specific status objects for summary
+        in_progress_status = Status.objects.filter(name__iexact='In Progress').first()
+        completed_status = Status.objects.filter(name__iexact='Completed').first()
+        rejected_status = Status.objects.filter(name__iexact='Rejected').first()
+        draft_status = Status.objects.filter(name__iexact='Draft').first()
+        
+        # Calculate pending approval tasks
+        pending_approval = 0
+        if user.is_staff:
+            pending_approval = base_queryset.filter(
+                Q(l1_approved_at__isnull=True, l1_approver__isnull=False) |
+                Q(l2_approved_at__isnull=True, l2_approver__isnull=False)
+            ).exclude(
+                Q(l1_rejected_at__isnull=False) | Q(l2_rejected_at__isnull=False)
+            ).count()
+        else:
+            pending_approval = base_queryset.filter(
+                Q(l1_approver=user, l1_approved_at__isnull=True, l1_rejected_at__isnull=True) |
+                Q(l2_approver=user, l2_approved_at__isnull=True, l2_rejected_at__isnull=True)
+            ).count()
+        
+        # Prepare response
+        response_data = {
+            "filter_applied": {
+                "type": time_filter,
+                "date": specific_date if specific_date else None,
+                "period": self._get_period_description(time_filter, today, specific_date)
+            },
+            "total_tasks": total_tasks,
+            "status_overview": status_overview,
+            "summary": {
+                "in_progress": {
+                    "count": base_queryset.filter(status=in_progress_status).count() if in_progress_status else 0,
+                    "percentage": round((base_queryset.filter(status=in_progress_status).count() / total_tasks * 100), 2) if total_tasks > 0 and in_progress_status else 0
+                },
+                "completed": {
+                    "count": base_queryset.filter(status=completed_status).count() if completed_status else 0,
+                    "percentage": round((base_queryset.filter(status=completed_status).count() / total_tasks * 100), 2) if total_tasks > 0 and completed_status else 0
+                },
+                "rejected": {
+                    "count": base_queryset.filter(status=rejected_status).count() if rejected_status else 0,
+                    "percentage": round((base_queryset.filter(status=rejected_status).count() / total_tasks * 100), 2) if total_tasks > 0 and rejected_status else 0
+                },
+                "draft": {
+                    "count": base_queryset.filter(status=draft_status).count() if draft_status else 0,
+                    "percentage": round((base_queryset.filter(status=draft_status).count() / total_tasks * 100), 2) if total_tasks > 0 and draft_status else 0
+                },
+                "pending_approval": {
+                    "count": pending_approval,
+                    "percentage": round((pending_approval / total_tasks * 100), 2) if total_tasks > 0 else 0
+                }
+            }
+        }
+        
+        return Response(response_data, status=http_status.HTTP_200_OK)
+    
+    def _get_period_description(self, time_filter, today, specific_date):
+        """Helper method to get human-readable period description"""
+        if specific_date:
+            return f"Tasks for {specific_date}"
+        elif time_filter == 'day':
+            return f"Tasks for {today.strftime('%Y-%m-%d')}"
+        elif time_filter == 'week':
+            start_of_week = today - timedelta(days=today.weekday())
+            end_of_week = start_of_week + timedelta(days=6)
+            return f"Tasks from {start_of_week.strftime('%Y-%m-%d')} to {end_of_week.strftime('%Y-%m-%d')}"
+        elif time_filter == 'month':
+            return f"Tasks for {today.strftime('%B %Y')}"
+        else:
+            return "All tasks"
+        
+class TimeDistributionByMembersAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        user = request.user
+        
+        # Get filter parameters
+        time_filter = request.query_params.get('time_filter', 'all')  # all, day, week, month
+        specific_date = request.query_params.get('date')  # For specific date
+        start_date = request.query_params.get('start_date')  # Custom date range
+        end_date = request.query_params.get('end_date')
+        
+        # Base queryset
+        if user.is_staff:
+            base_queryset = TaskList.objects.select_related('user', 'status')
+        else:
+            base_queryset = TaskList.objects.select_related('user', 'status').filter(
+                Q(user=user) |
+                Q(l1_approver=user) |
+                Q(l2_approver=user)
+            )
+        
+        # Apply time filters
+        base_queryset = self._apply_time_filters(base_queryset, time_filter, specific_date, start_date, end_date)
+        
+        # Get completed status for time calculation
+        completed_status = Status.objects.filter(name__iexact='Completed').first()
+        
+        # Calculate time distribution by member
+        members_data = []
+        
+        # Get all users who have tasks in the filtered queryset
+        user_ids = base_queryset.values_list('user_id', flat=True).distinct()
+        
+        for user_id in user_ids:
+            user_tasks = base_queryset.filter(user_id=user_id)
+            user_obj = User.objects.get(id=user_id)
+            
+            # Calculate total hours (all tasks)
+            total_hours = user_tasks.aggregate(total=Sum('duration'))['total'] or 0
+            
+            # Calculate completed hours (only completed tasks)
+            completed_hours = 0
+            if completed_status:
+                completed_hours = user_tasks.filter(status=completed_status).aggregate(total=Sum('duration'))['total'] or 0
+            
+            # Calculate pending hours (in progress tasks)
+            in_progress_status = Status.objects.filter(name__iexact='In Progress').first()
+            pending_hours = 0
+            if in_progress_status:
+                pending_hours = user_tasks.filter(status=in_progress_status).aggregate(total=Sum('duration'))['total'] or 0
+            
+            # Calculate task count
+            total_tasks = user_tasks.count()
+            completed_tasks = user_tasks.filter(status=completed_status).count() if completed_status else 0
+            
+            members_data.append({
+                "user_id": user_id,
+                # "name": user_obj.get_firstnamee() or user_obj.username,
+                "username": user_obj.firstname,
+                "email": user_obj.email,
+                "total_hours": float(total_hours),
+                "completed_hours": float(completed_hours),
+                "pending_hours": float(pending_hours),
+                "total_tasks": total_tasks,
+                "completed_tasks": completed_tasks,
+                "completion_rate": round((completed_tasks / total_tasks * 100), 2) if total_tasks > 0 else 0,
+                "avg_hours_per_task": round(float(total_hours / total_tasks), 2) if total_tasks > 0 else 0,
+            })
+        
+        # Calculate total hours across all members
+        total_all_hours = sum(member['total_hours'] for member in members_data)
+        
+        # Add percentages to each member
+        for member in members_data:
+            member['percentage'] = round((member['total_hours'] / total_all_hours * 100), 2) if total_all_hours > 0 else 0
+            member['formatted_percentage'] = f"{member['percentage']}%"
+        
+        # Sort by total hours descending
+        members_data.sort(key=lambda x: x['total_hours'], reverse=True)
+        
+        # Calculate summary statistics
+        active_members = len([m for m in members_data if m['total_hours'] > 0])
+        
+        response_data = {
+            "filter_applied": self._get_filter_description(time_filter, specific_date, start_date, end_date),
+            "summary": {
+                "total_members": len(members_data),
+                "active_members": active_members,
+                "total_hours_all_members": float(total_all_hours),
+                "average_hours_per_member": round(float(total_all_hours / len(members_data)), 2) if members_data else 0,
+                "total_completed_hours": sum(m['completed_hours'] for m in members_data),
+                "total_pending_hours": sum(m['pending_hours'] for m in members_data),
+            },
+            "members": members_data
+        }
+        
+        return Response(response_data, status=http_status.HTTP_200_OK)
+    
+    def _apply_time_filters(self, queryset, time_filter, specific_date, start_date, end_date):
+        """Apply time filters to queryset"""
+        today = timezone.now().date()
+        
+        if specific_date:
+            specific_date_obj = datetime.strptime(specific_date, '%Y-%m-%d').date()
+            date_start = timezone.make_aware(datetime.combine(specific_date_obj, datetime.min.time()))
+            date_end = timezone.make_aware(datetime.combine(specific_date_obj, datetime.max.time()))
+            return queryset.filter(date__range=[date_start, date_end])
+        
+        elif start_date and end_date:
+            start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
+            end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
+            start_datetime = timezone.make_aware(datetime.combine(start_date_obj, datetime.min.time()))
+            end_datetime = timezone.make_aware(datetime.combine(end_date_obj, datetime.max.time()))
+            return queryset.filter(date__range=[start_datetime, end_datetime])
+        
+        elif time_filter == 'day':
+            date_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+            date_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
+            return queryset.filter(date__range=[date_start, date_end])
+        
+        elif time_filter == 'week':
+            start_of_week = today - timedelta(days=today.weekday())
+            end_of_week = start_of_week + timedelta(days=6)
+            week_start = timezone.make_aware(datetime.combine(start_of_week, datetime.min.time()))
+            week_end = timezone.make_aware(datetime.combine(end_of_week, datetime.max.time()))
+            return queryset.filter(date__range=[week_start, week_end])
+        
+        elif time_filter == 'month':
+            start_of_month = today.replace(day=1)
+            if today.month == 12:
+                end_of_month = today.replace(year=today.year+1, month=1, day=1) - timedelta(days=1)
+            else:
+                end_of_month = today.replace(month=today.month+1, day=1) - timedelta(days=1)
+            month_start = timezone.make_aware(datetime.combine(start_of_month, datetime.min.time()))
+            month_end = timezone.make_aware(datetime.combine(end_of_month, datetime.max.time()))
+            return queryset.filter(date__range=[month_start, month_end])
+        
+        return queryset
+    
+    def _get_filter_description(self, time_filter, specific_date, start_date, end_date):
+        """Get human-readable filter description"""
+        if specific_date:
+            return f"Tasks for {specific_date}"
+        elif start_date and end_date:
+            return f"Tasks from {start_date} to {end_date}"
+        elif time_filter == 'day':
+            return f"Today's tasks ({timezone.now().date().strftime('%Y-%m-%d')})"
+        elif time_filter == 'week':
+            today = timezone.now().date()
+            start_of_week = today - timedelta(days=today.weekday())
+            end_of_week = start_of_week + timedelta(days=6)
+            return f"This week's tasks ({start_of_week.strftime('%Y-%m-%d')} to {end_of_week.strftime('%Y-%m-%d')})"
+        elif time_filter == 'month':
+            return f"This month's tasks ({timezone.now().date().strftime('%B %Y')})"
+        else:
+            return "All tasks"
+        
+class TaskCompletionSimpleAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        user = request.user
+        
+        # Get view type parameter
+        view_type = request.query_params.get('view', 'daily')  # daily, weekly, monthly
+        
+        # Get completed status
+        completed_status = Status.objects.filter(name__iexact='Completed').first()
+        
+        # Base queryset based on user permissions
+        if user.is_staff:
+            base_queryset = TaskList.objects.all()
+        else:
+            base_queryset = TaskList.objects.filter(
+                Q(user=user) |
+                Q(l1_approver=user) |
+                Q(l2_approver=user)
+            )
+        
+        # Get data based on view type
+        if view_type == 'daily':
+            data = self._get_daily_data(base_queryset, completed_status)
+        elif view_type == 'week':
+            data = self._get_weekly_data(base_queryset, completed_status)
+        elif view_type == 'month':
+            data = self._get_monthly_data(base_queryset, completed_status)
+        else:
+            data = self._get_daily_data(base_queryset, completed_status)
+        
+        return Response(data, status=http_status.HTTP_200_OK)
+    
+    def _get_daily_data(self, queryset, completed_status):
+        """Get today's completed tasks data"""
+        today = timezone.now().date()
+        today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+        today_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
+        
+        daily_tasks = queryset.filter(date__range=[today_start, today_end])
+        total_tasks = daily_tasks.count()
+        completed_tasks = 0
+        if completed_status:
+            completed_tasks = daily_tasks.filter(status=completed_status).count()
+        
+        completion_percentage = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0
+        
+        return {
+            "view": "daily",
+            "completed_count": completed_tasks,
+            "percentage": round(completion_percentage, 2)
+        }
+    
+    def _get_weekly_data(self, queryset, completed_status):
+        """Get current week's completed tasks data"""
+        today = timezone.now().date()
+        
+        # Get week start (Monday) and end (Sunday)
+        start_of_week = today - timedelta(days=today.weekday())
+        end_of_week = start_of_week + timedelta(days=6)
+        
+        week_start = timezone.make_aware(datetime.combine(start_of_week, datetime.min.time()))
+        week_end = timezone.make_aware(datetime.combine(end_of_week, datetime.max.time()))
+        
+        weekly_tasks = queryset.filter(date__range=[week_start, week_end])
+        total_tasks = weekly_tasks.count()
+        completed_tasks = 0
+        if completed_status:
+            completed_tasks = weekly_tasks.filter(status=completed_status).count()
+        
+        completion_percentage = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0
+        
+        return {
+            "view": "weekly",
+            "completed_count": completed_tasks,
+            "percentage": round(completion_percentage, 2)
+        }
+    
+    def _get_monthly_data(self, queryset, completed_status):
+        """Get current month's completed tasks data"""
+        today = timezone.now().date()
+        
+        # Get month start and end
+        start_of_month = today.replace(day=1)
+        if today.month == 12:
+            end_of_month = today.replace(year=today.year+1, month=1, day=1) - timedelta(days=1)
+        else:
+            end_of_month = today.replace(month=today.month+1, day=1) - timedelta(days=1)
+        
+        month_start = timezone.make_aware(datetime.combine(start_of_month, datetime.min.time()))
+        month_end = timezone.make_aware(datetime.combine(end_of_month, datetime.max.time()))
+        
+        monthly_tasks = queryset.filter(date__range=[month_start, month_end])
+        total_tasks = monthly_tasks.count()
+        completed_tasks = 0
+        if completed_status:
+            completed_tasks = monthly_tasks.filter(status=completed_status).count()
+        
+        completion_percentage = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0
+        
+        return {
+            "view": "monthly",
+            "completed_count": completed_tasks,
+            "percentage": round(completion_percentage, 2)
+        }
