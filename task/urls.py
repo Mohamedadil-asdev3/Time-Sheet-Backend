@@ -8,7 +8,7 @@ from django.urls import path
 from .views import (
 TaskListAPIView,TaskListAuditLogAPIView,SimpleTimeLogView,TimeLogStatsAPIView,DailyTimelineAPIView,WorkHoursOverviewAPIView,TopMembersAPIView,TaskApprovalAPIView,
 TimeDistributionAPIView,RecentTasksAPIView,TopUsedTasksAPIView,TopPlatformsAPIView,PlatformPerformanceAPIView,ProfileAPIView,ApprovalTableAPIView,
- RecentRequestAPIView,ApprovalStatusOverviewAPIView
+ RecentRequestAPIView,ApprovalStatusOverviewAPIView,TaskCountsAPIView,TaskStatusOverviewAPIView,TimeDistributionByMembersAPIView,TaskCompletionSimpleAPIView
 
 )
 
@@ -39,5 +39,11 @@ urlpatterns = [
     path("profile/", ProfileAPIView.as_view(), name="profile"),
     path("approval-table/", ApprovalTableAPIView.as_view(), name="approval-table"),
     path("recent-apprpoval-request/",RecentRequestAPIView.as_view(),name="recent-approval"),
-     path('tasks/approval-status-overview/', ApprovalStatusOverviewAPIView.as_view(), name='approval-status-overview'),
+    path('tasks/approval-status-overview/', ApprovalStatusOverviewAPIView.as_view(), name='approval-status-overview'),
+    path('tasks/counts/', TaskCountsAPIView.as_view(), name='task-counts'),
+    path('tasks/status-overview/', TaskStatusOverviewAPIView.as_view(), name='task-status-overview'),
+    path('tasks/member/time-distribution/', TimeDistributionByMembersAPIView.as_view(), name='time-distribution'),
+    path('tasks/today/completed/', TaskCompletionSimpleAPIView.as_view(), name='today-completed-tasks'),
+
+    
 ]
