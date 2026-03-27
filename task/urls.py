@@ -8,7 +8,7 @@ from django.urls import path
 from .views import (
 TaskListAPIView,TaskListAuditLogAPIView,SimpleTimeLogView,TimeLogStatsAPIView,WorkHoursOverviewAPIView,TopMembersAPIView,TaskApprovalAPIView,
 TimeDistributionAPIView,RecentTasksAPIView,TopUsedTasksAPIView,TopPlatformsAPIView,PlatformPerformanceAPIView,ProfileAPIView,ApprovalTableAPIView,
- RecentRequestAPIView
+ RecentRequestAPIView,ApprovalStatusOverviewAPIView
 
 )
 
@@ -37,5 +37,6 @@ urlpatterns = [
     path("tasks/platform-performance/", PlatformPerformanceAPIView.as_view(), name="platform-performance"),
     path("profile/", ProfileAPIView.as_view(), name="profile"),
     path("approval-table/", ApprovalTableAPIView.as_view(), name="approval-table"),
-    path("recent-apprpoval-request/",RecentRequestAPIView.as_view(),name="recent-approval")
+    path("recent-apprpoval-request/",RecentRequestAPIView.as_view(),name="recent-approval"),
+     path('tasks/approval-status-overview/', ApprovalStatusOverviewAPIView.as_view(), name='approval-status-overview'),
 ]
