@@ -134,3 +134,11 @@ class UserRoleMappingSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
             'is_active',
         ]
+
+class MemberSerializer(serializers.ModelSerializer):
+    department = serializers.CharField(source="department.name", default="")
+    location = serializers.CharField(source="location.name", default="")
+
+    class Meta:
+        model = User
+        fields = ["id", "name", "employee_id", "designation", "department", "location"]

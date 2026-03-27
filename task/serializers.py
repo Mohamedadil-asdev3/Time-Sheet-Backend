@@ -4,19 +4,47 @@ from .models import TaskList, TaskListAuditLog, Status
 from django.utils import timezone
 
 
+# class TaskListAuditLogSerializer(serializers.ModelSerializer):
+#     performed_by_username = serializers.CharField(source='performed_by.username', read_only=True)
+    
+#     class Meta:
+#         model = TaskListAuditLog
+#         fields = [
+#             'id', 'action', 'performed_by', 'performed_by_username',
+#             'old_values', 'new_values', 'remarks', 'created_at','l1_action_at',
+#             'l1_action_by','l1_status','l2_action_at','l2_action_by','l2_status',
+#             'l1_rejected_at','l2_rejected_at'
+            
+#         ]
+#         read_only_fields = fields
+
 class TaskListAuditLogSerializer(serializers.ModelSerializer):
     performed_by_username = serializers.CharField(source='performed_by.username', read_only=True)
-    
+    l1_status_display = serializers.SerializerMethodField()
+    l2_status_display = serializers.SerializerMethodField()
+
     class Meta:
         model = TaskListAuditLog
         fields = [
             'id', 'action', 'performed_by', 'performed_by_username',
-            'old_values', 'new_values', 'remarks', 'created_at','l1_action_at',
-            'l1_action_by','l1_status','l2_action_at','l2_action_by','l2_status',
+            'old_values', 'new_values', 'remarks', 'created_at',
+            'l1_action_at', 'l1_action_by', 'l1_status', 'l1_status_display',
+            'l2_action_at', 'l2_action_by', 'l2_status', 'l2_status_display',
             'l1_rejected_at','l2_rejected_at'
-            
         ]
         read_only_fields = fields
+
+    def get_l1_status_display(self, obj):
+        """Return human-readable L1 status"""
+        if obj.l1_status:
+            return obj.get_l1_status_display()  # 'Approved' or 'Rejected'
+        return None
+
+    def get_l2_status_display(self, obj):
+        """Return human-readable L2 status"""
+        if obj.l2_status:
+            return obj.get_l2_status_display()  # 'Approved' or 'Rejected'
+        return None
 
 
 class TaskListSerializer(serializers.ModelSerializer):

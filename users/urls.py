@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import UserListCreateAPIView, UserDetailAPIView
-from .views import  LoginView,ForgotPasswordView,ChangePasswordView,LogoutView,UserRoleMappingAPIView
+from .views import  LoginView,ForgotPasswordView,ChangePasswordView,LogoutView,UserRoleMappingAPIView,ApprovalMemberListAPIView
 from rest_framework_simplejwt.views import TokenObtainPairView,TokenRefreshView
 urlpatterns = [
     path('users/',          UserListCreateAPIView.as_view(),   name='user-list-create'),
@@ -10,6 +10,8 @@ urlpatterns = [
     path('user-role-mappings/<int:pk>/', UserRoleMappingAPIView.as_view(), name='user-role-mapping-detail'),   
     path("login/", LoginView.as_view(), name="login"),
     path("logout/",LogoutView.as_view(), name="logout"),
+    path('approval-members/', ApprovalMemberListAPIView.as_view(), name='approval-members'),
+
     path("token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("forgot-password/", ForgotPasswordView.as_view(), name="forgot-password"),
