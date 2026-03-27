@@ -19,7 +19,7 @@ class UserListCreateAPIView(APIView):
     """
     List all users (non-deleted) or create a new user
     """
-    permission_classes = [permissions.IsAdminUser]  # ← change to your needs
+    # permission_classes = [permissions.IsAdminUser]  # ← change to your needs
 
     # def get(self, request):
     #     users = User.objects.filter(is_deleted=False).order_by('-created_at')

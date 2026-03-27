@@ -546,7 +546,30 @@ class TimeLogStatsAPIView(APIView):
             "total_count": total,
             "statuses": result
         })
-        
+    
+
+class DailyTimelineAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = TaskListSerializer
+
+    def get(self, request):
+        today = timezone.localdate()
+        user = request.user
+
+        queryset = TaskList.objects.select_related(
+            'platform', 'task', 'subtask', 'status',
+            'l1_approver', 'l2_approver'
+        ).filter(date=today)
+
+        # If not staff → show only own tasks
+        if not user.is_staff:
+            queryset = queryset.filter(user=user)
+
+        queryset = queryset.order_by('created_at')
+
+        return Response(self.serializer_class(queryset, many=True).data)
+    
+
 # Work Hours Overview
 class WorkHoursOverviewAPIView(APIView):
     """
