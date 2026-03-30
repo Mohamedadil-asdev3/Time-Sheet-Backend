@@ -412,6 +412,19 @@ class TaskListAPIView(APIView):
         
         return queryset
 
+    # def get(self, request, pk=None):
+    #     if pk:
+    #         task = self.get_object(pk)
+    #         return Response(self.serializer_class(task).data)
+
+    #     qs = self.get_queryset()
+    #     qs = self.apply_filters(request, qs)
+        
+    #     # Debug: Print count
+    #     print(f"Total tasks found: {qs.count()}")
+        
+    #     serializer = self.serializer_class(qs, many=True)
+    #     return Response(serializer.data)
     def get(self, request, pk=None):
         if pk:
             task = self.get_object(pk)
@@ -423,8 +436,24 @@ class TaskListAPIView(APIView):
         # Debug: Print count
         print(f"Total tasks found: {qs.count()}")
         
-        serializer = self.serializer_class(qs, many=True)
-        return Response(serializer.data)
+        # Group tasks by date using defaultdict
+        grouped_data = defaultdict(list)
+        
+        for task in qs:
+            task_data = self.serializer_class(task).data
+            date_str = task.date.strftime('%Y-%m-%d')
+            grouped_data[date_str].append(task_data)
+        
+        # Convert to list of dictionaries
+        response_data = [
+            {'date': date, 'tasks': tasks} 
+            for date, tasks in grouped_data.items()
+        ]
+        
+        # Sort by date descending
+        response_data.sort(key=lambda x: x['date'], reverse=True)
+        
+        return Response(response_data)
 
     def post(self, request):
         if request.user.is_staff:
