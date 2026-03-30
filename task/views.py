@@ -2454,7 +2454,7 @@ class TaskStatusOverviewAPIView(APIView):
         user = request.user
         
         # Get time filter parameter
-        time_filter = request.query_params.get('time_filter', 'all')  # all, day, week, month
+        view_type = request.query_params.get('view', 'daily')  # all, day, week, month
         specific_date = request.query_params.get('date')  # For specific date (YYYY-MM-DD)
         
         # Base queryset based on user permissions
@@ -2476,19 +2476,19 @@ class TaskStatusOverviewAPIView(APIView):
             date_start = timezone.make_aware(datetime.combine(specific_date_obj, datetime.min.time()))
             date_end = timezone.make_aware(datetime.combine(specific_date_obj, datetime.max.time()))
             base_queryset = base_queryset.filter(date__range=[date_start, date_end])
-        elif time_filter == 'day':
+        elif view_type == 'daily':
             # Today's tasks
             date_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
             date_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
             base_queryset = base_queryset.filter(date__range=[date_start, date_end])
-        elif time_filter == 'week':
+        elif view_type== 'weekly':
             # Current week (Monday to Sunday)
             start_of_week = today - timedelta(days=today.weekday())
             end_of_week = start_of_week + timedelta(days=6)
             week_start = timezone.make_aware(datetime.combine(start_of_week, datetime.min.time()))
             week_end = timezone.make_aware(datetime.combine(end_of_week, datetime.max.time()))
             base_queryset = base_queryset.filter(date__range=[week_start, week_end])
-        elif time_filter == 'month':
+        elif view_type == 'monthly':
             # Current month
             start_of_month = today.replace(day=1)
             if today.month == 12:
@@ -2547,9 +2547,9 @@ class TaskStatusOverviewAPIView(APIView):
         # Prepare response
         response_data = {
             "filter_applied": {
-                "type": time_filter,
+                "type": view_type,
                 "date": specific_date if specific_date else None,
-                "period": self._get_period_description(time_filter, today, specific_date)
+                "period": self._get_period_description(view_type, today, specific_date)
             },
             "total_tasks": total_tasks,
             "status_overview": status_overview,
