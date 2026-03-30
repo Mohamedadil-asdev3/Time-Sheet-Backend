@@ -1356,24 +1356,9 @@ class TopPlatformsAPIView(APIView):
 
     def get(self, request):
         user = request.user
-        view_type = request.query_params.get("view", "monthly")
 
-        today = timezone.now().date()
-
-        # ---------------- DATE FILTER ----------------
-        if view_type == "daily":
-            queryset = TaskList.objects.filter(date=today)
-
-        elif view_type == "weekly":
-            start_date = today - timedelta(days=7)
-            queryset = TaskList.objects.filter(date__range=[start_date, today])
-
-        elif view_type == "monthly":
-            start_date = today - timedelta(days=30)
-            queryset = TaskList.objects.filter(date__range=[start_date, today])
-
-        else:
-            return Response({"error": "Invalid view"}, status=400)
+        # Base queryset (ALL data)
+        queryset = TaskList.objects.all()
 
         # ---------------- APPROVER FILTER ----------------
         if not user.is_staff:
@@ -1395,12 +1380,13 @@ class TopPlatformsAPIView(APIView):
             .order_by("-total_hours")[:5]
         )
 
-        total_hours_all = sum([float(d["total_hours"] or 0) for d in data]) or 1
+        total_hours_all = sum(float(d["total_hours"] or 0) for d in data) or 1
 
         response = []
 
         for d in data:
-            usage_percent = round((float(d["total_hours"]) / total_hours_all) * 100)
+            total_hours = float(d["total_hours"] or 0)
+            usage_percent = round((total_hours / total_hours_all) * 100)
 
             response.append({
                 "name": d["platform__name"],
@@ -1409,7 +1395,6 @@ class TopPlatformsAPIView(APIView):
             })
 
         return Response(response)
-    
 
 class PlatformPerformanceAPIView(APIView):
     permission_classes = [IsAuthenticated]
