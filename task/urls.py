@@ -34,16 +34,15 @@ urlpatterns = [
     path("tasks/top-tasks/", TopUsedTasksAPIView.as_view(), name="top-tasks-user"),
     path('top-members/', TopMembersAPIView.as_view(), name='top-members'),
     path('tasks/approvals/', TaskApprovalAPIView.as_view(), name='task-approvals-approver'),
+    path('tasks/approval-status-overview/', ApprovalStatusOverviewAPIView.as_view(), name='approval-status-overview'),
+    path('tasks/member/time-distribution/', TimeDistributionByMembersAPIView.as_view(), name='time-distribution'),
+    path('tasks/today/completed/', TaskCompletionSimpleAPIView.as_view(), name='today-completed-tasks'),
     path("tasks/top-platforms/", TopPlatformsAPIView.as_view(), name="top-platforms"),
     path("tasks/platform-performance/", PlatformPerformanceAPIView.as_view(), name="platform-performance"),
     path("profile/", ProfileAPIView.as_view(), name="profile"),
     path("approval-table/", ApprovalTableAPIView.as_view(), name="approval-table"),
     path("recent-apprpoval-request/",RecentRequestAPIView.as_view(),name="recent-approval"),
-    path('tasks/approval-status-overview/', ApprovalStatusOverviewAPIView.as_view(), name='approval-status-overview'),
-    path('tasks/counts/', TaskCountsAPIView.as_view(), name='task-counts'),
-    path('tasks/status-overview/', TaskStatusOverviewAPIView.as_view(), name='task-status-overview'),
-    path('tasks/member/time-distribution/', TimeDistributionByMembersAPIView.as_view(), name='time-distribution'),
-    path('tasks/today/completed/', TaskCompletionSimpleAPIView.as_view(), name='today-completed-tasks'),
+    
 
     
 ]
