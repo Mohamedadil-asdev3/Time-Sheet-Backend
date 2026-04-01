@@ -428,6 +428,7 @@ class TaskListAPIView(APIView):
     def get(self, request, pk=None):
         if pk:
             task = self.get_object(pk)
+            print(task)
             return Response(self.serializer_class(task).data)
 
         qs = self.get_queryset()
@@ -463,6 +464,7 @@ class TaskListAPIView(APIView):
             )
 
         data = request.data
+        print("recived data",data)
         is_bulk = isinstance(data, list)
 
         serializer = self.serializer_class(
@@ -531,6 +533,13 @@ class TaskListAPIView(APIView):
         rejected = Status.objects.filter(name__iexact='Rejected').first()
         draft = Status.objects.filter(name__iexact='Draft').first()
 
+        status_from_request = request.data.get('status')
+
+        if status_from_request:
+            status_obj = Status.objects.filter(name__iexact=status_from_request).first()
+            if status_obj:
+                serializer.validated_data['status'] = status_obj
+
         # ----------------- L1 Approve -----------------
         if action == 'L1_APPROVE' and in_progress:
             if not task.l1_approver or task.l1_approver != user:
@@ -554,12 +563,24 @@ class TaskListAPIView(APIView):
 
         # ----------------- SUBMIT -----------------
         # ----------------- Submit -----------------
-        if action == 'SUBMIT' and in_progress:
+        # if action == 'SUBMIT' and in_progress:
+        #     if task.user != user:
+        #         return Response({"error": "Only task owner can submit"}, status=403)
+        #     if not task.user.first_level_manager:
+        #         return Response({"error": "No reporting manager assigned"}, status=400)
+        #     serializer.validated_data['status'] = in_progress
+        #     serializer.validated_data['l1_approver'] = task.user.first_level_manager
+        #     serializer.validated_data['l1_status'] = None
+        #     serializer.validated_data['l2_status'] = None
+
+        if action == 'SUBMIT':
             if task.user != user:
                 return Response({"error": "Only task owner can submit"}, status=403)
+
             if not task.user.first_level_manager:
                 return Response({"error": "No reporting manager assigned"}, status=400)
-            serializer.validated_data['status'] = in_progress
+
+            serializer.validated_data['status'] = in_progress  # force correct DB status
             serializer.validated_data['l1_approver'] = task.user.first_level_manager
             serializer.validated_data['l1_status'] = None
             serializer.validated_data['l2_status'] = None

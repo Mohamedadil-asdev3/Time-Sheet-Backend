@@ -87,11 +87,12 @@ class TaskListSerializer(serializers.ModelSerializer):
             'platform_name', 'task_name', 'subtask_name', 'status_name',
             'l1_approver_name', 'l2_approver_name', 'last_modified_by_name',
             'l1_approved_at', 'l2_approved_at',
-            'is_draft', 'is_in_progress', 'is_completed','status',
+            'is_draft', 'is_in_progress', 'is_completed',
             'l1_approver', 'l2_approver','l1_rejected_at','l2_rejected_at'
         ]
 
     def validate(self, data):
+        print('validatttttt',data)
         task    = data.get('task')
         subtask = data.get('subtask')
         if subtask and task and subtask.task_id != task.id:
@@ -101,6 +102,7 @@ class TaskListSerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
+        print('validated_data',validated_data)
         request = self.context['request']
         creator = request.user
 
@@ -113,7 +115,9 @@ class TaskListSerializer(serializers.ModelSerializer):
         if creator.second_level_manager:
             validated_data['l2_approver'] = creator.second_level_manager
 
-        if 'status' not in validated_data:
+        status = validated_data.get('status')
+
+        if not status:
             draft = Status.objects.filter(name__iexact='draft').first()
             if draft:
                 validated_data['status'] = draft
