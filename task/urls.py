@@ -43,6 +43,7 @@ urlpatterns = [
     path("tasks/platform-performance/", PlatformPerformanceAPIView.as_view(), name="platform-performance"),
     path("profile/", ProfileAPIView.as_view(), name="profile"),
     path("approval-table/", ApprovalTableAPIView.as_view(), name="approval-table"),
+    # path("approval-table/throw/", ApprovalTablethrowAPIView.as_view(), name="approval-table"),
     path("recent-apprpoval-request/",RecentRequestAPIView.as_view(),name="recent-approval"),
     
 
