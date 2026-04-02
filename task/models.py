@@ -51,11 +51,17 @@ class TaskList(models.Model):
         help_text="External Bitrix ID"
     )
 
-    duration = models.DecimalField(
-        max_digits=6,
-        decimal_places=2,
-        default=0,
-        help_text="Hours spent (e.g. 4.50)"
+    # duration = models.DecimalField(
+    #     max_digits=6,
+    #     decimal_places=2,
+    #     default=0,
+    #     help_text="Hours spent (e.g. 4.50)"
+    # )
+    duration = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        help_text="Duration (e.g. 4.50 or 4h 30m)"
     )
 
     description = models.TextField(blank=True, null=True)
