@@ -1357,9 +1357,94 @@ class WorkHoursOverviewAPIView(APIView):
                 "months": yearly_data
             })
 
+# class TopMembersAPIView(APIView):
+#     """
+#     GET /api/top-members/
+    
+#     Returns top users ranked by total task hours (shown as hrs + mins).
+    
+#     Query params:
+#     - limit: number of top members (default 10, max 50)
+#     - period: overall / today (default: overall)
+#     """
+#     permission_classes = [IsAuthenticated]
+
+#     def get(self, request):
+#         limit = min(int(request.query_params.get('limit', 10)), 50)
+#         period = request.query_params.get('period', 'overall').lower()
+
+#         today = timezone.now().date()
+
+#         # Base queryset: all tasks (adjust status filter if you only want completed)
+#         qs = TaskList.objects.all()
+
+#         # Date filter
+#         if period == 'today':
+#             qs = qs.filter(date=today)
+#         elif period == 'overall':
+#             pass  # all time
+#         else:
+#             return Response({"error": "Invalid period. Use: overall / today"}, status=400)
+
+#         if not request.user.is_staff:
+#             qs = qs.filter(user=request.user)
+
+#         # Aggregate: total duration (decimal) + task count per user
+#         top_members = qs.values(
+#             'user__id',
+#             'user__name',
+#             'user__firstname',
+#             'user__email'
+#         ).annotate(
+#             total_duration=Sum('duration', default=0),
+#             task_count=Count('id')
+#         ).order_by('-total_duration')[:limit]
+
+#         # Format result with hrs + mins
+#         result = []
+#         rank = 1
+#         for row in top_members:
+#             total_hours_decimal = float(row['total_duration'] or 0)  # decimal → float
+#             hours = int(total_hours_decimal)
+#             minutes = int((total_hours_decimal - hours) * 60)
+
+#             name = row['user__firstname'] or row['user__name'] or "Unknown User"
+#             username = row['user__name'] or row['user__email'] or "N/A"
+
+#             result.append({
+#                 "rank": rank,
+#                 "user_id": row['user__id'],
+#                 "name": name,
+#                 "username": username,
+#                 "total_time": f"{hours} hrs {minutes} mins",
+#                 "total_hours_decimal": f"{total_hours_decimal:.2f}",
+#                 "task_count": row['task_count']
+#             })
+#             rank += 1
+
+#         total_members = User.objects.filter(is_active=True).count()
+
+#         return Response({
+#             "status": "success",
+#             "total_members_in_system": total_members,
+#             "period": period.capitalize(),
+#             "top_members_count": len(result),
+#             "top_members": result
+#         })
+import re
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django.db.models import Count
+from django.utils import timezone
+from django.contrib.auth import get_user_model
+from .models import TaskList
+
+User = get_user_model()
+
 class TopMembersAPIView(APIView):
     """
-    GET /api/top-members/
+    GET /task/top-members/
     
     Returns top users ranked by total task hours (shown as hrs + mins).
     
@@ -1369,13 +1454,66 @@ class TopMembersAPIView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    def parse_duration_to_hours(self, duration_str):
+        """Convert duration string like '4.50', '1h 30m', or '4h 30m' to decimal hours (4.5)"""
+        if not duration_str:
+            return 0
+        
+        if isinstance(duration_str, (int, float)):
+            return float(duration_str)
+        
+        duration_str = str(duration_str).strip()
+        
+        # Try parsing as decimal number first
+        try:
+            return float(duration_str)
+        except ValueError:
+            pass
+        
+        # Parse "Xh Ym" format
+        hours = 0
+        minutes = 0
+        
+        hour_match = re.search(r'(\d+(?:\.\d+)?)\s*h', duration_str, re.IGNORECASE)
+        if hour_match:
+            hours = float(hour_match.group(1))
+        
+        minute_match = re.search(r'(\d+(?:\.\d+)?)\s*m', duration_str, re.IGNORECASE)
+        if minute_match:
+            minutes = float(minute_match.group(1))
+        
+        # If no patterns matched, try to convert directly
+        if not hour_match and not minute_match:
+            try:
+                return float(duration_str)
+            except ValueError:
+                return 0
+        
+        return hours + (minutes / 60)
+
+    def format_hours_to_duration(self, hours):
+        """Convert decimal hours (2.5) to readable format like '2h 30m'"""
+        if not hours or hours == 0:
+            return "0h"
+        
+        total_minutes = int(hours * 60)
+        h = total_minutes // 60
+        m = total_minutes % 60
+        
+        if h > 0 and m > 0:
+            return f"{h}h {m}m"
+        elif h > 0:
+            return f"{h}h"
+        else:
+            return f"{m}m"
+
     def get(self, request):
         limit = min(int(request.query_params.get('limit', 10)), 50)
         period = request.query_params.get('period', 'overall').lower()
 
         today = timezone.now().date()
 
-        # Base queryset: all tasks (adjust status filter if you only want completed)
+        # Base queryset: all tasks
         qs = TaskList.objects.all()
 
         # Date filter
@@ -1389,40 +1527,73 @@ class TopMembersAPIView(APIView):
         if not request.user.is_staff:
             qs = qs.filter(user=request.user)
 
-        # Aggregate: total duration (decimal) + task count per user
-        top_members = qs.values(
+        # Get all tasks with user and duration data
+        # Use the actual field names from your User model
+        tasks = qs.select_related('user').values(
             'user__id',
-            'user__name',
-            'user__firstname',
-            'user__email'
-        ).annotate(
-            total_duration=Sum('duration', default=0),
-            task_count=Count('id')
-        ).order_by('-total_duration')[:limit]
+            'user__firstname',  # Use firstname instead of username
+            'user__email',
+            'duration'
+        )
+
+        # Manual aggregation by user
+        user_data = {}
+        
+        for task in tasks:
+            user_id = task['user__id']
+            
+            if not user_id:
+                continue
+                
+            duration_str = task['duration']
+            hours = self.parse_duration_to_hours(duration_str)
+            
+            if user_id not in user_data:
+                user_data[user_id] = {
+                    'user_id': user_id,
+                    'firstname': task['user__firstname'],
+                    'email': task['user__email'],
+                    'total_hours': 0,
+                    'task_count': 0
+                }
+            
+            user_data[user_id]['total_hours'] += hours
+            user_data[user_id]['task_count'] += 1
+
+        # Convert to list and sort by total_hours
+        top_members_list = list(user_data.values())
+        top_members_list.sort(key=lambda x: x['total_hours'], reverse=True)
+        top_members_list = top_members_list[:limit]
 
         # Format result with hrs + mins
         result = []
         rank = 1
-        for row in top_members:
-            total_hours_decimal = float(row['total_duration'] or 0)  # decimal → float
-            hours = int(total_hours_decimal)
-            minutes = int((total_hours_decimal - hours) * 60)
-
-            name = row['user__firstname'] or row['user__name'] or "Unknown User"
-            username = row['user__name'] or row['user__email'] or "N/A"
+        for row in top_members_list:
+            total_hours = row['total_hours']
+            
+            # Get name - use firstname, fallback to email if needed
+            name = row['firstname'] or "Unknown User"
+            display_name = row['firstname'] or row['email'] or "N/A"
 
             result.append({
                 "rank": rank,
-                "user_id": row['user__id'],
+                "user_id": row['user_id'],
                 "name": name,
-                "username": username,
-                "total_time": f"{hours} hrs {minutes} mins",
-                "total_hours_decimal": f"{total_hours_decimal:.2f}",
+                "display_name": display_name,
+                "email": row['email'],
+                "total_time": self.format_hours_to_duration(total_hours),
+                "total_hours_decimal": f"{total_hours:.2f}",
                 "task_count": row['task_count']
             })
             rank += 1
 
-        total_members = User.objects.filter(is_active=True).count()
+        # Get total active members - adjust based on your User model
+        # You might have an 'is_active' field or similar
+        try:
+            total_members = User.objects.filter(is_active=True).count()
+        except:
+            # If is_active field doesn't exist, count all users
+            total_members = User.objects.count()
 
         return Response({
             "status": "success",
@@ -1430,8 +1601,7 @@ class TopMembersAPIView(APIView):
             "period": period.capitalize(),
             "top_members_count": len(result),
             "top_members": result
-        })
-    
+        })    
 # class TimeDistributionAPIView(APIView):
 
 #     def get(self, request):
@@ -1918,8 +2088,112 @@ class TopUsedTasksAPIView(APIView):
             })
         
         return Response(data)
+# class TopPlatformsAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def get(self, request):
+#         user = request.user
+#         view_type = request.query_params.get("view", "monthly")
+
+#         today = timezone.now().date()
+
+#         # ---------------- DATE FILTER ----------------
+#         if view_type == "daily":
+#             queryset = TaskList.objects.filter(date=today)
+
+#         elif view_type == "weekly":
+#             start_date = today - timedelta(days=7)
+#             queryset = TaskList.objects.filter(date__range=[start_date, today])
+
+#         elif view_type == "monthly":
+#             start_date = today - timedelta(days=30)
+#             queryset = TaskList.objects.filter(date__range=[start_date, today])
+
+#         else:
+#             return Response({"error": "Invalid view"}, status=400)
+
+#         # ---------------- APPROVER FILTER ----------------
+#         if not user.is_staff:
+#             queryset = queryset.filter(
+#                 Q(l1_approver=user) |
+#                 Q(l2_approver=user) |
+#                 Q(user__first_level_manager=user) |
+#                 Q(user__second_level_manager=user)
+#             )
+
+#         # ---------------- AGGREGATION ----------------
+#         data = (
+#             queryset
+#             .values("platform__id", "platform__name")
+#             .annotate(
+#                 total_hours=Sum("duration"),
+#                 user_count=Count("user", distinct=True)
+#             )
+#             .order_by("-total_hours")[:5]
+#         )
+
+#         total_hours_all = sum([float(d["total_hours"] or 0) for d in data]) or 1
+
+#         response = []
+
+#         for d in data:
+#             usage_percent = round((float(d["total_hours"]) / total_hours_all) * 100)
+
+#             response.append({
+#                 "name": d["platform__name"],
+#                 "users": f"{d['user_count']} Active Users",
+#                 "usage": usage_percent
+#             })
+
+#         return Response(response)
+import re
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django.db.models import Q, Count
+from django.utils import timezone
+from datetime import timedelta
+from .models import TaskList
+
 class TopPlatformsAPIView(APIView):
     permission_classes = [IsAuthenticated]
+
+    def parse_duration_to_hours(self, duration_str):
+        """Convert duration string like '4.50', '1h 30m', or '4h 30m' to decimal hours (4.5)"""
+        if not duration_str:
+            return 0
+        
+        if isinstance(duration_str, (int, float)):
+            return float(duration_str)
+        
+        duration_str = str(duration_str).strip()
+        
+        # Try parsing as decimal number first
+        try:
+            return float(duration_str)
+        except ValueError:
+            pass
+        
+        # Parse "Xh Ym" format
+        hours = 0
+        minutes = 0
+        
+        hour_match = re.search(r'(\d+(?:\.\d+)?)\s*h', duration_str, re.IGNORECASE)
+        if hour_match:
+            hours = float(hour_match.group(1))
+        
+        minute_match = re.search(r'(\d+(?:\.\d+)?)\s*m', duration_str, re.IGNORECASE)
+        if minute_match:
+            minutes = float(minute_match.group(1))
+        
+        # If no patterns matched, try to convert directly
+        if not hour_match and not minute_match:
+            try:
+                return float(duration_str)
+            except ValueError:
+                return 0
+        
+        return hours + (minutes / 60)
 
     def get(self, request):
         user = request.user
@@ -1951,36 +2225,234 @@ class TopPlatformsAPIView(APIView):
                 Q(user__second_level_manager=user)
             )
 
-        # ---------------- AGGREGATION ----------------
-        data = (
-            queryset
-            .values("platform__id", "platform__name")
-            .annotate(
-                total_hours=Sum("duration"),
-                user_count=Count("user", distinct=True)
-            )
-            .order_by("-total_hours")[:5]
+        # Get all tasks with platform and duration data
+        tasks = queryset.select_related('platform', 'user').values(
+            'platform__id',
+            'platform__name',
+            'duration',
+            'user_id'
         )
 
-        total_hours_all = sum([float(d["total_hours"] or 0) for d in data]) or 1
+        # Manual aggregation by platform
+        platform_data = {}
+        
+        for task in tasks:
+            platform_id = task['platform__id']
+            platform_name = task['platform__name']
+            
+            if not platform_id:
+                continue
+                
+            duration_str = task['duration']
+            hours = self.parse_duration_to_hours(duration_str)
+            
+            if platform_id not in platform_data:
+                platform_data[platform_id] = {
+                    'platform_id': platform_id,
+                    'platform_name': platform_name,
+                    'total_hours': 0,
+                    'users': set()  # Use set for unique users
+                }
+            
+            platform_data[platform_id]['total_hours'] += hours
+            
+            # Add unique user
+            if task['user_id']:
+                platform_data[platform_id]['users'].add(task['user_id'])
 
+        # Convert to list and sort by total_hours
+        platforms_list = []
+        for platform_id, data in platform_data.items():
+            platforms_list.append({
+                'platform_id': platform_id,
+                'platform_name': data['platform_name'],
+                'total_hours': data['total_hours'],
+                'user_count': len(data['users'])
+            })
+        
+        # Sort by total hours descending and get top 5
+        platforms_list.sort(key=lambda x: x['total_hours'], reverse=True)
+        top_platforms = platforms_list[:5]
+
+        # Calculate total hours for percentage
+        total_hours_all = sum(p['total_hours'] for p in top_platforms)
+        
+        # Prevent division by zero
+        if total_hours_all == 0:
+            total_hours_all = 1
+
+        # Build response
         response = []
-
-        for d in data:
-            usage_percent = round((float(d["total_hours"]) / total_hours_all) * 100)
-
+        for platform in top_platforms:
+            usage_percent = round((platform['total_hours'] / total_hours_all) * 100)
+            
+            # Format user count text
+            user_count_text = f"{platform['user_count']} Active User{'s' if platform['user_count'] != 1 else ''}"
+            
             response.append({
-                "name": d["platform__name"],
-                "users": f"{d['user_count']} Active Users",
-                "usage": usage_percent
+                "name": platform['platform_name'],
+                "users": user_count_text,
+                "usage": usage_percent,
+                # Optional: include raw data for debugging
+                "_metadata": {
+                    "total_hours": round(platform['total_hours'], 2),
+                    "user_count": platform['user_count']
+                }
             })
 
-        return Response(response)
+        return Response({
+            "status": "success",
+            "view": view_type,
+            "date_range": self._get_date_range_description(view_type, today),
+            "top_platforms": response
+        })
     
+    def _get_date_range_description(self, view_type, today):
+        """Get human-readable date range description"""
+        if view_type == "daily":
+            return f"Today ({today.strftime('%Y-%m-%d')})"
+        elif view_type == "weekly":
+            start_date = today - timedelta(days=7)
+            return f"Last 7 days ({start_date.strftime('%Y-%m-%d')} to {today.strftime('%Y-%m-%d')})"
+        elif view_type == "monthly":
+            start_date = today - timedelta(days=30)
+            return f"Last 30 days ({start_date.strftime('%Y-%m-%d')} to {today.strftime('%Y-%m-%d')})"
+        return "Unknown range"    
+
+# class PlatformPerformanceAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def get(self, request):
+#         user = request.user
+#         view_type = request.query_params.get("view", "monthly")
+
+#         today = timezone.now().date()
+
+#         # ---------------- DATE FILTER ----------------
+#         if view_type == "daily":
+#             queryset = TaskList.objects.filter(date=today)
+
+#         elif view_type == "weekly":
+#             start_date = today - timedelta(days=7)
+#             queryset = TaskList.objects.filter(date__range=[start_date, today])
+
+#         elif view_type == "monthly":
+#             start_date = today - timedelta(days=30)
+#             queryset = TaskList.objects.filter(date__range=[start_date, today])
+
+#         else:
+#             return Response({"error": "Invalid view"}, status=400)
+
+#         # ---------------- APPROVER FILTER ----------------
+#         if not user.is_staff:
+#             queryset = queryset.filter(
+#                 Q(l1_approver=user) |
+#                 Q(l2_approver=user) |
+#                 Q(user__first_level_manager=user) |
+#                 Q(user__second_level_manager=user)
+#             )
+
+#         # ---------------- GROUP BY PLATFORM ----------------
+#         platforms = (
+#             queryset
+#             .values("platform__id", "platform__name")
+#             .annotate(
+#                 total_hours=Sum("duration"),
+#                 total_tasks=Count("id"),
+#                 users=Count("user", distinct=True),
+#                 completed_tasks=Count("id", filter=Q(status__name__iexact="Completed")),
+#                 approved_tasks=Count("id", filter=Q(l1_approved_at__isnull=False)),
+#                 integrated_tasks=Count("id", filter=Q(bitrix_id__isnull=False))
+#             )
+#         )
+
+#         series = []
+
+#         for p in platforms:
+#             users = p["users"] or 1
+#             total_tasks = p["total_tasks"] or 1
+
+#             # ---------------- METRICS ----------------
+#             active_users = min(users * 10, 100)  
+
+#             performance = min(int((float(p["total_hours"] or 0) / users) * 10), 100)
+
+#             reliability = int((p["approved_tasks"] / total_tasks) * 100)
+
+#             integration = int((p["integrated_tasks"] / total_tasks) * 100)
+
+#             satisfaction = int((p["completed_tasks"] / total_tasks) * 100)
+
+#             series.append({
+#                 "name": p["platform__name"],
+#                 "data": [
+#                     active_users,
+#                     performance,
+#                     reliability,
+#                     integration,
+#                     satisfaction
+#                 ]
+#             })
+
+#         return Response({
+#             "categories": [
+#                 "Active Users",
+#                 "Performance",
+#                 "Reliability",
+#                 "Integration",
+#                 "Satisfaction"
+#             ],
+#             "series": series
+#         })
+import re
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django.db.models import Q, Count
+from django.utils import timezone
+from datetime import timedelta
+from .models import TaskList
 
 class PlatformPerformanceAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def parse_duration_to_hours(self, duration_str):
+        """Convert duration string like '4.50', '1h 30m', or '4h 30m' to decimal hours (4.5)"""
+        if not duration_str:
+            return 0
+        
+        if isinstance(duration_str, (int, float)):
+            return float(duration_str)
+        
+        duration_str = str(duration_str).strip()
+        
+        # Try parsing as decimal number first
+        try:
+            return float(duration_str)
+        except ValueError:
+            pass
+        
+        # Parse "Xh Ym" format
+        hours = 0
+        minutes = 0
+        
+        hour_match = re.search(r'(\d+(?:\.\d+)?)\s*h', duration_str, re.IGNORECASE)
+        if hour_match:
+            hours = float(hour_match.group(1))
+        
+        minute_match = re.search(r'(\d+(?:\.\d+)?)\s*m', duration_str, re.IGNORECASE)
+        if minute_match:
+            minutes = float(minute_match.group(1))
+        
+        # If no patterns matched, try to convert directly
+        if not hour_match and not minute_match:
+            try:
+                return float(duration_str)
+            except ValueError:
+                return 0
+        
+        return hours + (minutes / 60)
+
     def get(self, request):
         user = request.user
         view_type = request.query_params.get("view", "monthly")
@@ -2011,49 +2483,123 @@ class PlatformPerformanceAPIView(APIView):
                 Q(user__second_level_manager=user)
             )
 
-        # ---------------- GROUP BY PLATFORM ----------------
-        platforms = (
-            queryset
-            .values("platform__id", "platform__name")
-            .annotate(
-                total_hours=Sum("duration"),
-                total_tasks=Count("id"),
-                users=Count("user", distinct=True),
-                completed_tasks=Count("id", filter=Q(status__name__iexact="Completed")),
-                approved_tasks=Count("id", filter=Q(l1_approved_at__isnull=False)),
-                integrated_tasks=Count("id", filter=Q(bitrix_id__isnull=False))
-            )
+        # Get all tasks with platform and duration data
+        tasks = queryset.select_related('platform', 'status').values(
+            'platform__id', 
+            'platform__name', 
+            'duration',
+            'status__name',
+            'user_id',
+            'bitrix_id',
+            'l1_approved_at'
         )
 
+        # Manual aggregation by platform
+        platform_data = {}
+        
+        for task in tasks:
+            platform_id = task['platform__id']
+            platform_name = task['platform__name']
+            
+            if not platform_id:
+                continue
+                
+            duration_str = task['duration']
+            hours = self.parse_duration_to_hours(duration_str)
+            
+            if platform_id not in platform_data:
+                platform_data[platform_id] = {
+                    'platform_id': platform_id,
+                    'platform_name': platform_name,
+                    'total_hours': 0,
+                    'total_tasks': 0,
+                    'users': set(),  # Use set for unique users
+                    'completed_tasks': 0,
+                    'approved_tasks': 0,
+                    'integrated_tasks': 0
+                }
+            
+            platform_data[platform_id]['total_hours'] += hours
+            platform_data[platform_id]['total_tasks'] += 1
+            
+            # Add unique user
+            if task['user_id']:
+                platform_data[platform_id]['users'].add(task['user_id'])
+            
+            # Check for completed status
+            status_name = task['status__name']
+            if status_name and status_name.lower() in ['completed', 'done', 'finished']:
+                platform_data[platform_id]['completed_tasks'] += 1
+            
+            # Check for approved tasks (l1_approved_at is not null)
+            if task['l1_approved_at']:
+                platform_data[platform_id]['approved_tasks'] += 1
+            
+            # Check for integrated tasks (has bitrix_id)
+            if task['bitrix_id']:
+                platform_data[platform_id]['integrated_tasks'] += 1
+
+        # Build response series
         series = []
-
-        for p in platforms:
-            users = p["users"] or 1
-            total_tasks = p["total_tasks"] or 1
-
-            # ---------------- METRICS ----------------
-            active_users = min(users * 10, 100)  
-
-            performance = min(int((float(p["total_hours"] or 0) / users) * 10), 100)
-
-            reliability = int((p["approved_tasks"] / total_tasks) * 100)
-
-            integration = int((p["integrated_tasks"] / total_tasks) * 100)
-
-            satisfaction = int((p["completed_tasks"] / total_tasks) * 100)
-
+        
+        for platform_id, data in platform_data.items():
+            users_count = len(data['users'])
+            total_tasks = data['total_tasks']
+            total_hours = data['total_hours']
+            
+            # Avoid division by zero
+            if users_count == 0:
+                users_count = 1
+            if total_tasks == 0:
+                total_tasks = 1
+            
+            # ---------------- METRICS CALCULATIONS ----------------
+            
+            # Active Users (scored 0-100 based on user count)
+            # Assuming max 10 users per platform for scoring
+            active_users = min(int((users_count / 10) * 100), 100) if users_count <= 10 else 100
+            
+            # Performance (hours per user, scaled to 0-100)
+            # Assuming 40 hours per user is excellent (full work week)
+            hours_per_user = total_hours / users_count
+            performance = min(int((hours_per_user / 40) * 100), 100)
+            
+            # Reliability (% of approved tasks)
+            reliability = int((data['approved_tasks'] / total_tasks) * 100)
+            
+            # Integration (% of tasks with bitrix_id)
+            integration = int((data['integrated_tasks'] / total_tasks) * 100)
+            
+            # Satisfaction (% of completed tasks)
+            satisfaction = int((data['completed_tasks'] / total_tasks) * 100)
+            
             series.append({
-                "name": p["platform__name"],
+                "name": data['platform_name'],
                 "data": [
                     active_users,
                     performance,
                     reliability,
                     integration,
                     satisfaction
-                ]
+                ],
+                # Optional: include raw data for debugging
+                "_metadata": {
+                    "total_hours": round(total_hours, 2),
+                    "total_tasks": total_tasks,
+                    "unique_users": users_count,
+                    "completed_tasks": data['completed_tasks'],
+                    "approved_tasks": data['approved_tasks'],
+                    "integrated_tasks": data['integrated_tasks']
+                }
             })
+        
+        # Sort series by performance or total_hours (optional)
+        series.sort(key=lambda x: x['data'][1], reverse=True)  # Sort by performance score
 
         return Response({
+            "status": "success",
+            "view": view_type,
+            "date_range": self._get_date_range_description(view_type, today),
             "categories": [
                 "Active Users",
                 "Performance",
@@ -2063,6 +2609,18 @@ class PlatformPerformanceAPIView(APIView):
             ],
             "series": series
         })
+    
+    def _get_date_range_description(self, view_type, today):
+        """Get human-readable date range description"""
+        if view_type == "daily":
+            return f"Today ({today.strftime('%Y-%m-%d')})"
+        elif view_type == "weekly":
+            start_date = today - timedelta(days=7)
+            return f"Last 7 days ({start_date.strftime('%Y-%m-%d')} to {today.strftime('%Y-%m-%d')})"
+        elif view_type == "monthly":
+            start_date = today - timedelta(days=30)
+            return f"Last 30 days ({start_date.strftime('%Y-%m-%d')} to {today.strftime('%Y-%m-%d')})"
+        return "Unknown range"
 class ProfileAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -3743,19 +4301,226 @@ class TaskStatusOverviewAPIView(APIView):
         else:
             return "All tasks"
         
+# class TimeDistributionByMembersAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+    
+#     def get(self, request):
+#         user = request.user
+        
+#         # Get filter parameters
+#         time_filter = request.query_params.get('time_filter', 'all')  # all, day, week, month
+#         specific_date = request.query_params.get('date')  # For specific date
+#         start_date = request.query_params.get('start_date')  # Custom date range
+#         end_date = request.query_params.get('end_date')
+        
+#         # Base queryset
+#         if user.is_staff:
+#             base_queryset = TaskList.objects.select_related('user', 'status')
+#         else:
+#             base_queryset = TaskList.objects.select_related('user', 'status').filter(
+#                 Q(user=user) |
+#                 Q(l1_approver=user) |
+#                 Q(l2_approver=user)
+#             )
+        
+#         # Apply time filters
+#         base_queryset = self._apply_time_filters(base_queryset, time_filter, specific_date, start_date, end_date)
+        
+#         # Get completed status for time calculation
+#         completed_status = Status.objects.filter(name__iexact='Completed').first()
+        
+#         # Calculate time distribution by member
+#         members_data = []
+        
+#         # Get all users who have tasks in the filtered queryset
+#         user_ids = base_queryset.values_list('user_id', flat=True).distinct()
+        
+#         for user_id in user_ids:
+#             user_tasks = base_queryset.filter(user_id=user_id)
+#             user_obj = User.objects.get(id=user_id)
+            
+#             # Calculate total hours (all tasks)
+#             total_hours = user_tasks.aggregate(total=Sum('duration'))['total'] or 0
+            
+#             # Calculate completed hours (only completed tasks)
+#             completed_hours = 0
+#             if completed_status:
+#                 completed_hours = user_tasks.filter(status=completed_status).aggregate(total=Sum('duration'))['total'] or 0
+            
+#             # Calculate pending hours (in progress tasks)
+#             in_progress_status = Status.objects.filter(name__iexact='In Progress').first()
+#             pending_hours = 0
+#             if in_progress_status:
+#                 pending_hours = user_tasks.filter(status=in_progress_status).aggregate(total=Sum('duration'))['total'] or 0
+            
+#             # Calculate task count
+#             total_tasks = user_tasks.count()
+#             completed_tasks = user_tasks.filter(status=completed_status).count() if completed_status else 0
+            
+#             members_data.append({
+#                 "user_id": user_id,
+#                 # "name": user_obj.get_firstnamee() or user_obj.username,
+#                 "username": user_obj.firstname,
+#                 "email": user_obj.email,
+#                 "total_hours": float(total_hours),
+#                 "completed_hours": float(completed_hours),
+#                 "pending_hours": float(pending_hours),
+#                 "total_tasks": total_tasks,
+#                 "completed_tasks": completed_tasks,
+#                 "completion_rate": round((completed_tasks / total_tasks * 100), 2) if total_tasks > 0 else 0,
+#                 "avg_hours_per_task": round(float(total_hours / total_tasks), 2) if total_tasks > 0 else 0,
+#             })
+        
+#         # Calculate total hours across all members
+#         total_all_hours = sum(member['total_hours'] for member in members_data)
+        
+#         # Add percentages to each member
+#         for member in members_data:
+#             member['percentage'] = round((member['total_hours'] / total_all_hours * 100), 2) if total_all_hours > 0 else 0
+#             member['formatted_percentage'] = f"{member['percentage']}%"
+        
+#         # Sort by total hours descending
+#         members_data.sort(key=lambda x: x['total_hours'], reverse=True)
+        
+#         # Calculate summary statistics
+#         active_members = len([m for m in members_data if m['total_hours'] > 0])
+        
+#         response_data = {
+#             "filter_applied": self._get_filter_description(time_filter, specific_date, start_date, end_date),
+#             "summary": {
+#                 "total_members": len(members_data),
+#                 "active_members": active_members,
+#                 "total_hours_all_members": float(total_all_hours),
+#                 "average_hours_per_member": round(float(total_all_hours / len(members_data)), 2) if members_data else 0,
+#                 "total_completed_hours": sum(m['completed_hours'] for m in members_data),
+#                 "total_pending_hours": sum(m['pending_hours'] for m in members_data),
+#             },
+#             "members": members_data
+#         }
+        
+#         return Response(response_data, status=http_status.HTTP_200_OK)
+    
+#     def _apply_time_filters(self, queryset, time_filter, specific_date, start_date, end_date):
+#         """Apply time filters to queryset"""
+#         today = timezone.now().date()
+        
+#         if specific_date:
+#             specific_date_obj = datetime.strptime(specific_date, '%Y-%m-%d').date()
+#             date_start = timezone.make_aware(datetime.combine(specific_date_obj, datetime.min.time()))
+#             date_end = timezone.make_aware(datetime.combine(specific_date_obj, datetime.max.time()))
+#             return queryset.filter(date__range=[date_start, date_end])
+        
+#         elif start_date and end_date:
+#             start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
+#             end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
+#             start_datetime = timezone.make_aware(datetime.combine(start_date_obj, datetime.min.time()))
+#             end_datetime = timezone.make_aware(datetime.combine(end_date_obj, datetime.max.time()))
+#             return queryset.filter(date__range=[start_datetime, end_datetime])
+        
+#         elif time_filter == 'day':
+#             date_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+#             date_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
+#             return queryset.filter(date__range=[date_start, date_end])
+        
+#         elif time_filter == 'week':
+#             start_of_week = today - timedelta(days=today.weekday())
+#             end_of_week = start_of_week + timedelta(days=6)
+#             week_start = timezone.make_aware(datetime.combine(start_of_week, datetime.min.time()))
+#             week_end = timezone.make_aware(datetime.combine(end_of_week, datetime.max.time()))
+#             return queryset.filter(date__range=[week_start, week_end])
+        
+#         elif time_filter == 'month':
+#             start_of_month = today.replace(day=1)
+#             if today.month == 12:
+#                 end_of_month = today.replace(year=today.year+1, month=1, day=1) - timedelta(days=1)
+#             else:
+#                 end_of_month = today.replace(month=today.month+1, day=1) - timedelta(days=1)
+#             month_start = timezone.make_aware(datetime.combine(start_of_month, datetime.min.time()))
+#             month_end = timezone.make_aware(datetime.combine(end_of_month, datetime.max.time()))
+#             return queryset.filter(date__range=[month_start, month_end])
+        
+#         return queryset
+    
+#     def _get_filter_description(self, time_filter, specific_date, start_date, end_date):
+#         """Get human-readable filter description"""
+#         if specific_date:
+#             return f"Tasks for {specific_date}"
+#         elif start_date and end_date:
+#             return f"Tasks from {start_date} to {end_date}"
+#         elif time_filter == 'day':
+#             return f"Today's tasks ({timezone.now().date().strftime('%Y-%m-%d')})"
+#         elif time_filter == 'week':
+#             today = timezone.now().date()
+#             start_of_week = today - timedelta(days=today.weekday())
+#             end_of_week = start_of_week + timedelta(days=6)
+#             return f"This week's tasks ({start_of_week.strftime('%Y-%m-%d')} to {end_of_week.strftime('%Y-%m-%d')})"
+#         elif time_filter == 'month':
+#             return f"This month's tasks ({timezone.now().date().strftime('%B %Y')})"
+#         else:
+#             return "All tasks"
+import re
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework import status as http_status
+from django.db.models import Q
+from django.utils import timezone
+from datetime import datetime, timedelta
+from django.contrib.auth import get_user_model
+from .models import TaskList, Status
+
+User = get_user_model()
+
 class TimeDistributionByMembersAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    
+    def parse_duration_to_hours(self, duration_str):
+        """Convert duration string like '4.50', '1h 30m', or '4h 30m' to decimal hours (4.5)"""
+        if not duration_str:
+            return 0
+        
+        if isinstance(duration_str, (int, float)):
+            return float(duration_str)
+        
+        duration_str = str(duration_str).strip()
+        
+        # Try parsing as decimal number first
+        try:
+            return float(duration_str)
+        except ValueError:
+            pass
+        
+        # Parse "Xh Ym" format
+        hours = 0
+        minutes = 0
+        
+        hour_match = re.search(r'(\d+(?:\.\d+)?)\s*h', duration_str, re.IGNORECASE)
+        if hour_match:
+            hours = float(hour_match.group(1))
+        
+        minute_match = re.search(r'(\d+(?:\.\d+)?)\s*m', duration_str, re.IGNORECASE)
+        if minute_match:
+            minutes = float(minute_match.group(1))
+        
+        # If no patterns matched, try to convert directly
+        if not hour_match and not minute_match:
+            try:
+                return float(duration_str)
+            except ValueError:
+                return 0
+        
+        return hours + (minutes / 60)
     
     def get(self, request):
         user = request.user
         
         # Get filter parameters
-        time_filter = request.query_params.get('time_filter', 'all')  # all, day, week, month
-        specific_date = request.query_params.get('date')  # For specific date
-        start_date = request.query_params.get('start_date')  # Custom date range
+        view_param = request.query_params.get('view', 'daily')
+        specific_date = request.query_params.get('date')
+        start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
         
-        # Base queryset
+        # Base queryset with related fields
         if user.is_staff:
             base_queryset = TaskList.objects.select_related('user', 'status')
         else:
@@ -3766,57 +4531,88 @@ class TimeDistributionByMembersAPIView(APIView):
             )
         
         # Apply time filters
-        base_queryset = self._apply_time_filters(base_queryset, time_filter, specific_date, start_date, end_date)
+        base_queryset = self._apply_time_filters(base_queryset, view_param, specific_date, start_date, end_date)
         
-        # Get completed status for time calculation
-        completed_status = Status.objects.filter(name__iexact='Completed').first()
+        # Get all tasks with their durations and status
+        tasks = base_queryset.values('user_id', 'duration', 'status__name')
         
-        # Calculate time distribution by member
+        # Aggregate manually to handle string durations
+        members_data_dict = {}
+        
+        for task in tasks:
+            user_id = task['user_id']
+            duration_str = task['duration']
+            status_name = task['status__name']
+            
+            # Skip if no user_id
+            if not user_id:
+                continue
+                
+            hours = self.parse_duration_to_hours(duration_str)
+            
+            if user_id not in members_data_dict:
+                members_data_dict[user_id] = {
+                    'user_id': user_id,
+                    'total_hours': 0,
+                    'completed_hours': 0,
+                    'pending_hours': 0,
+                    'total_tasks': 0,
+                    'completed_tasks': 0,
+                }
+            
+            members_data_dict[user_id]['total_hours'] += hours
+            members_data_dict[user_id]['total_tasks'] += 1
+            
+            # Check for completed status using model's helper or direct check
+            if status_name and status_name.lower() in ['completed', 'done', 'finished']:
+                members_data_dict[user_id]['completed_hours'] += hours
+                members_data_dict[user_id]['completed_tasks'] += 1
+            
+            # Check for in progress status
+            if status_name and status_name.lower() in ['inprogress', 'in progress']:
+                members_data_dict[user_id]['pending_hours'] += hours
+        
+        # Get user details and build final response
         members_data = []
+        for user_id, data in members_data_dict.items():
+            try:
+                user_obj = User.objects.get(id=user_id)
+                
+                total_hours = data['total_hours']
+                completed_hours = data['completed_hours']
+                pending_hours = data['pending_hours']
+                total_tasks = data['total_tasks']
+                completed_tasks = data['completed_tasks']
+                
+                completion_rate = round((completed_tasks / total_tasks * 100), 2) if total_tasks > 0 else 0
+                avg_hours_per_task = round(total_hours / total_tasks, 2) if total_tasks > 0 else 0
+                
+                # Get username/display name - adjust based on your User model fields
+                display_name = (
+                    getattr(user_obj, 'firstname', None) or 
+                    getattr(user_obj, 'first_name', None) or 
+                    user_obj.username
+                )
+                
+                members_data.append({
+                    "user_id": user_id,
+                    "username": display_name,
+                    "email": user_obj.email,
+                    "total_hours": round(total_hours, 2),
+                    "completed_hours": round(completed_hours, 2),
+                    "pending_hours": round(pending_hours, 2),
+                    "total_tasks": total_tasks,
+                    "completed_tasks": completed_tasks,
+                    "completion_rate": completion_rate,
+                    "avg_hours_per_task": avg_hours_per_task,
+                })
+            except User.DoesNotExist:
+                continue
         
-        # Get all users who have tasks in the filtered queryset
-        user_ids = base_queryset.values_list('user_id', flat=True).distinct()
-        
-        for user_id in user_ids:
-            user_tasks = base_queryset.filter(user_id=user_id)
-            user_obj = User.objects.get(id=user_id)
-            
-            # Calculate total hours (all tasks)
-            total_hours = user_tasks.aggregate(total=Sum('duration'))['total'] or 0
-            
-            # Calculate completed hours (only completed tasks)
-            completed_hours = 0
-            if completed_status:
-                completed_hours = user_tasks.filter(status=completed_status).aggregate(total=Sum('duration'))['total'] or 0
-            
-            # Calculate pending hours (in progress tasks)
-            in_progress_status = Status.objects.filter(name__iexact='In Progress').first()
-            pending_hours = 0
-            if in_progress_status:
-                pending_hours = user_tasks.filter(status=in_progress_status).aggregate(total=Sum('duration'))['total'] or 0
-            
-            # Calculate task count
-            total_tasks = user_tasks.count()
-            completed_tasks = user_tasks.filter(status=completed_status).count() if completed_status else 0
-            
-            members_data.append({
-                "user_id": user_id,
-                # "name": user_obj.get_firstnamee() or user_obj.username,
-                "username": user_obj.firstname,
-                "email": user_obj.email,
-                "total_hours": float(total_hours),
-                "completed_hours": float(completed_hours),
-                "pending_hours": float(pending_hours),
-                "total_tasks": total_tasks,
-                "completed_tasks": completed_tasks,
-                "completion_rate": round((completed_tasks / total_tasks * 100), 2) if total_tasks > 0 else 0,
-                "avg_hours_per_task": round(float(total_hours / total_tasks), 2) if total_tasks > 0 else 0,
-            })
-        
-        # Calculate total hours across all members
+        # Calculate totals
         total_all_hours = sum(member['total_hours'] for member in members_data)
         
-        # Add percentages to each member
+        # Add percentages
         for member in members_data:
             member['percentage'] = round((member['total_hours'] / total_all_hours * 100), 2) if total_all_hours > 0 else 0
             member['formatted_percentage'] = f"{member['percentage']}%"
@@ -3824,83 +4620,72 @@ class TimeDistributionByMembersAPIView(APIView):
         # Sort by total hours descending
         members_data.sort(key=lambda x: x['total_hours'], reverse=True)
         
-        # Calculate summary statistics
+        # Calculate summary
         active_members = len([m for m in members_data if m['total_hours'] > 0])
         
         response_data = {
-            "filter_applied": self._get_filter_description(time_filter, specific_date, start_date, end_date),
+            "filter_applied": self._get_filter_description(view_param, specific_date, start_date, end_date),
             "summary": {
                 "total_members": len(members_data),
                 "active_members": active_members,
-                "total_hours_all_members": float(total_all_hours),
-                "average_hours_per_member": round(float(total_all_hours / len(members_data)), 2) if members_data else 0,
-                "total_completed_hours": sum(m['completed_hours'] for m in members_data),
-                "total_pending_hours": sum(m['pending_hours'] for m in members_data),
+                "total_hours_all_members": round(total_all_hours, 2),
+                "average_hours_per_member": round(total_all_hours / len(members_data), 2) if members_data else 0,
+                "total_completed_hours": round(sum(m['completed_hours'] for m in members_data), 2),
+                "total_pending_hours": round(sum(m['pending_hours'] for m in members_data), 2),
             },
             "members": members_data
         }
         
         return Response(response_data, status=http_status.HTTP_200_OK)
     
-    def _apply_time_filters(self, queryset, time_filter, specific_date, start_date, end_date):
-        """Apply time filters to queryset"""
+    def _apply_time_filters(self, queryset, view_param, specific_date, start_date, end_date):
+        """Apply time filters to queryset based on view parameter"""
         today = timezone.now().date()
         
         if specific_date:
             specific_date_obj = datetime.strptime(specific_date, '%Y-%m-%d').date()
-            date_start = timezone.make_aware(datetime.combine(specific_date_obj, datetime.min.time()))
-            date_end = timezone.make_aware(datetime.combine(specific_date_obj, datetime.max.time()))
-            return queryset.filter(date__range=[date_start, date_end])
+            return queryset.filter(date=specific_date_obj)
         
         elif start_date and end_date:
             start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
             end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
-            start_datetime = timezone.make_aware(datetime.combine(start_date_obj, datetime.min.time()))
-            end_datetime = timezone.make_aware(datetime.combine(end_date_obj, datetime.max.time()))
-            return queryset.filter(date__range=[start_datetime, end_datetime])
+            return queryset.filter(date__range=[start_date_obj, end_date_obj])
         
-        elif time_filter == 'day':
-            date_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
-            date_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
-            return queryset.filter(date__range=[date_start, date_end])
+        elif view_param == 'daily':
+            return queryset.filter(date=today)
         
-        elif time_filter == 'week':
+        elif view_param == 'weekly':
             start_of_week = today - timedelta(days=today.weekday())
             end_of_week = start_of_week + timedelta(days=6)
-            week_start = timezone.make_aware(datetime.combine(start_of_week, datetime.min.time()))
-            week_end = timezone.make_aware(datetime.combine(end_of_week, datetime.max.time()))
-            return queryset.filter(date__range=[week_start, week_end])
+            return queryset.filter(date__range=[start_of_week, end_of_week])
         
-        elif time_filter == 'month':
+        elif view_param == 'monthly':
             start_of_month = today.replace(day=1)
             if today.month == 12:
                 end_of_month = today.replace(year=today.year+1, month=1, day=1) - timedelta(days=1)
             else:
                 end_of_month = today.replace(month=today.month+1, day=1) - timedelta(days=1)
-            month_start = timezone.make_aware(datetime.combine(start_of_month, datetime.min.time()))
-            month_end = timezone.make_aware(datetime.combine(end_of_month, datetime.max.time()))
-            return queryset.filter(date__range=[month_start, month_end])
+            return queryset.filter(date__range=[start_of_month, end_of_month])
         
         return queryset
     
-    def _get_filter_description(self, time_filter, specific_date, start_date, end_date):
+    def _get_filter_description(self, view_param, specific_date, start_date, end_date):
         """Get human-readable filter description"""
         if specific_date:
             return f"Tasks for {specific_date}"
         elif start_date and end_date:
             return f"Tasks from {start_date} to {end_date}"
-        elif time_filter == 'day':
+        elif view_param == 'daily':
             return f"Today's tasks ({timezone.now().date().strftime('%Y-%m-%d')})"
-        elif time_filter == 'week':
+        elif view_param == 'weekly':
             today = timezone.now().date()
             start_of_week = today - timedelta(days=today.weekday())
             end_of_week = start_of_week + timedelta(days=6)
             return f"This week's tasks ({start_of_week.strftime('%Y-%m-%d')} to {end_of_week.strftime('%Y-%m-%d')})"
-        elif time_filter == 'month':
+        elif view_param == 'monthly':
             return f"This month's tasks ({timezone.now().date().strftime('%B %Y')})"
         else:
-            return "All tasks"
-        
+            return "All tasks"        
 class TaskCompletionSimpleAPIView(APIView):
     permission_classes = [IsAuthenticated]
     
