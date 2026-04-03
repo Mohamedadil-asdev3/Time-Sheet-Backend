@@ -499,19 +499,8 @@ class TaskListAPIView(APIView):
         action = request.data.get('action')
         status_lower = (task.status.name or '').lower().strip() if task.status else ''
 
-        # Capture old values
-        old_values = {
-            'status': task.status.name if task.status else None,
-            'duration': str(task.duration) if task.duration is not None else None,
-            'description': task.description or "",
-            'bitrix_id': task.bitrix_id or "",
-            'l1_approver_id': task.l1_approver_id,
-            'l2_approver_id': task.l2_approver_id,
-            'l1_status': 'APPROVED' if task.l1_approved_at else ('REJECTED' if task.l1_rejected_at else None),
-            'l2_status': 'APPROVED' if task.l2_approved_at else ('REJECTED' if task.l2_rejected_at else None),
-            'l1_approved_at': task.l1_approved_at.isoformat() if task.l1_approved_at else None,
-            'l2_approved_at': task.l2_approved_at.isoformat() if task.l2_approved_at else None,
-        }
+        # Capture old values for audit
+        old_values = self.serializer_class(task).data
 
         serializer = self.serializer_class(
             task,
@@ -523,55 +512,30 @@ class TaskListAPIView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=400)
 
-        # Get status objects
-        in_progress = Status.objects.filter(name__iexact='In Progress').first() or \
-                    Status.objects.filter(name__iexact='inprogress').first()
-        completed = Status.objects.filter(name__iexact='Completed').first() or \
-                    Status.objects.filter(name__iexact='Done').first()
+        # Status objects
+        in_progress = Status.objects.filter(name__iexact='In Progress').first() or Status.objects.filter(name__iexact='inprogress').first()
+        completed = Status.objects.filter(name__iexact='Completed').first() or Status.objects.filter(name__iexact='Done').first()
         rejected = Status.objects.filter(name__iexact='Rejected').first()
         draft = Status.objects.filter(name__iexact='Draft').first()
 
-        # ----------------- L1 Approve -----------------
-        # if action == 'L1_APPROVE' and in_progress:
-        #     if not task.l1_approver or task.l1_approver != user:
-        #         return Response({"error": "Only assigned L1 approver can approve"}, status=403)
-        #     serializer.validated_data['l1_approver'] = user
-        #     serializer.validated_data['l1_approved_at'] = timezone.now()
-        #     serializer.validated_data['l1_status'] = 'APPROVED'
-        #     if task.user.second_level_manager:
-        #         serializer.validated_data['l2_approver'] = task.user.second_level_manager
-        #     if status_lower == 'draft':
-        #         serializer.validated_data['status'] = in_progress
-        
+        # ----------------- ACTION HANDLING -----------------
+        # L1 Approve
         if action == 'L1_APPROVE':
-            # Check permission
             if not task.l1_approver or task.l1_approver != user:
-                return Response(
-                    {"error": "Only assigned L1 approver can approve"},
-                    status=403
-                )
-
-            # Validate status (important fix)
+                return Response({"error": "Only assigned L1 approver can approve"}, status=403)
             if status_lower not in ['submitted', 'submited', 'in progress']:
-                return Response(
-                    {"error": "Task must be in submitted or in progress state for L1 approval"},
-                    status=400
-                )
+                return Response({"error": "Task must be in submitted or in progress state for L1 approval"}, status=400)
 
-            # Set L1 approval details
             serializer.validated_data['l1_approver'] = user
             serializer.validated_data['l1_approved_at'] = timezone.now()
             serializer.validated_data['l1_status'] = 'APPROVED'
 
-            # Assign L2 approver if exists
             if task.user.second_level_manager:
                 serializer.validated_data['l2_approver'] = task.user.second_level_manager
-
-            # Move status to In Progress after L1 approval
             if in_progress:
                 serializer.validated_data['status'] = in_progress
 
-        # ----------------- L2 Approve -----------------
+        # L2 Approve
         if action == 'L2_APPROVE' and completed:
             if not task.l2_approver or task.l2_approver != user:
                 return Response({"error": "Only assigned L2 approver can approve"}, status=403)
@@ -580,8 +544,7 @@ class TaskListAPIView(APIView):
             serializer.validated_data['l2_status'] = 'APPROVED'
             serializer.validated_data['status'] = completed
 
-        # ----------------- SUBMIT -----------------
-        # ----------------- Submit -----------------
+        # Submit
         if action == 'SUBMIT' and in_progress:
             if task.user != user:
                 return Response({"error": "Only task owner can submit"}, status=403)
@@ -592,7 +555,7 @@ class TaskListAPIView(APIView):
             serializer.validated_data['l1_status'] = None
             serializer.validated_data['l2_status'] = None
 
-        # ----------------- L1 Reject -----------------
+        # L1 Reject
         if action == 'L1_REJECT' and rejected:
             if not task.l1_approver or task.l1_approver != user:
                 return Response({"error": "Only assigned L1 approver can reject"}, status=403)
@@ -600,8 +563,7 @@ class TaskListAPIView(APIView):
             serializer.validated_data['l1_rejected_at'] = timezone.now()
             serializer.validated_data['l1_status'] = 'REJECTED'
 
-      
-        # ----------------- L2 Reject -----------------
+        # L2 Reject
         if action == 'L2_REJECT' and rejected:
             if not task.l2_approver or task.l2_approver != user:
                 return Response({"error": "Only assigned L2 approver can reject"}, status=403)
@@ -609,7 +571,7 @@ class TaskListAPIView(APIView):
             serializer.validated_data['l2_rejected_at'] = timezone.now()
             serializer.validated_data['l2_status'] = 'REJECTED'
 
-        # ----------------- RESUBMIT -----------------
+        # Resubmit
         if action == 'RESUBMIT' and in_progress:
             if task.user != user:
                 return Response({"error": "Only task owner can resubmit"}, status=403)
@@ -621,27 +583,21 @@ class TaskListAPIView(APIView):
             serializer.validated_data['l1_approver'] = task.user.first_level_manager
             serializer.validated_data['l2_approver'] = task.user.second_level_manager
 
-        # ----------------- Last Modified -----------------
+        # ----------------- DEFAULT PAYLOAD UPDATES -----------------
+        # Apply status from payload if no action
+        if not action and request.data.get('status'):
+            serializer.validated_data['status_id'] = request.data.get('status')
+
+        # Update last modified
         serializer.validated_data['last_modified_by'] = user
         updated_task = serializer.save()
-        
-        new_values = {
-            'status': updated_task.status.name if updated_task.status else None,
-            'duration': str(updated_task.duration) if updated_task.duration is not None else None,
-            'description': updated_task.description or "",
-            'bitrix_id': updated_task.bitrix_id or "",
-            'l1_approver_id': updated_task.l1_approver_id,
-            'l2_approver_id': updated_task.l2_approver_id,
-            # Derive L1/L2 status from timestamps
-            'l1_status': 'APPROVED' if updated_task.l1_approved_at else ('REJECTED' if updated_task.l1_rejected_at else None),
-            'l2_status': 'APPROVED' if updated_task.l2_approved_at else ('REJECTED' if updated_task.l2_rejected_at else None),
-            'l1_approved_at': updated_task.l1_approved_at.isoformat() if updated_task.l1_approved_at else None,
-            'l2_approved_at': updated_task.l2_approved_at.isoformat() if updated_task.l2_approved_at else None,
-        }
+
+        # Capture new values for audit
+        new_values = self.serializer_class(updated_task).data
 
         log_action = action if action in ['L1_APPROVE', 'L2_APPROVE', 'L1_REJECT', 'L2_REJECT', 'RESUBMIT'] else 'UPDATE'
-        remarks = request.data.get('remarks', f"Task {log_action.lower()}d")
-        
+        remarks = request.data.get('remarks') or f"Task {log_action.lower()}d"
+
         self._create_audit_log(
             task=updated_task,
             action=log_action,
@@ -650,8 +606,7 @@ class TaskListAPIView(APIView):
             remarks=remarks
         )
 
-        return Response(serializer.data)
-
+        return Response(new_values)
     def delete(self, request, pk):
         task = self.get_object(pk)
         status_name = (task.status.name or '').lower().strip() if task.status else ''
@@ -667,7 +622,283 @@ class TaskListAPIView(APIView):
         task.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+
+
+
 class TaskApprovalAPIView(APIView):
+    """
+    Endpoint for L1/L2 approval, rejection, and resubmission
+    """
+    serializer_class = TaskListSerializer
+
+    def post(self, request, pk):
+        task = get_object_or_404(TaskList, pk=pk)
+        user = request.user
+        action = request.data.get('action')
+
+        # Capture old values
+        old_values = {
+            'status': task.status.name if task.status else None,
+            'l1_status': 'APPROVED' if task.l1_approved_at else ('REJECTED' if task.l1_rejected_at else None),
+            'l2_status': 'APPROVED' if task.l2_approved_at else ('REJECTED' if task.l2_rejected_at else None),
+        }
+
+        # Status objects
+        in_progress = Status.objects.filter(name__iexact='In Progress').first()
+        completed = Status.objects.filter(name__iexact='Completed').first() or Status.objects.filter(name__iexact='Done').first()
+        rejected = Status.objects.filter(name__iexact='Rejected').first()
+
+        serializer = self.serializer_class(task, data={}, partial=True, context={'request': request})
+
+        # ----------------- L1 Approve -----------------
+        if action == 'L1_APPROVE':
+            if task.l1_approver != user:
+                return Response({"error": "Only assigned L1 approver can approve"}, status=403)
+            if task.status.name.lower() not in ['submitted', 'submited', 'in progress']:
+                return Response({"error": "Task must be in submitted/in progress state"}, status=400)
+
+            serializer.validated_data['l1_approver'] = user
+            serializer.validated_data['l1_approved_at'] = timezone.now()
+            serializer.validated_data['l1_status'] = 'APPROVED'
+            if task.user.second_level_manager:
+                serializer.validated_data['l2_approver'] = task.user.second_level_manager
+            if in_progress:
+                serializer.validated_data['status'] = in_progress
+
+        # ----------------- L2 Approve -----------------
+        elif action == 'L2_APPROVE':
+            if task.l2_approver != user:
+                return Response({"error": "Only assigned L2 approver can approve"}, status=403)
+            serializer.validated_data['l2_approver'] = user
+            serializer.validated_data['l2_approved_at'] = timezone.now()
+            serializer.validated_data['l2_status'] = 'APPROVED'
+            serializer.validated_data['status'] = completed
+
+        # ----------------- L1 Reject -----------------
+        elif action == 'L1_REJECT':
+            if task.l1_approver != user:
+                return Response({"error": "Only assigned L1 approver can reject"}, status=403)
+            serializer.validated_data['l1_rejected_at'] = timezone.now()
+            serializer.validated_data['l1_status'] = 'REJECTED'
+            serializer.validated_data['status'] = rejected
+
+        # ----------------- L2 Reject -----------------
+        elif action == 'L2_REJECT':
+            if task.l2_approver != user:
+                return Response({"error": "Only assigned L2 approver can reject"}, status=403)
+            serializer.validated_data['l2_rejected_at'] = timezone.now()
+            serializer.validated_data['l2_status'] = 'REJECTED'
+            serializer.validated_data['status'] = rejected
+
+        # ----------------- RESUBMIT -----------------
+        elif action == 'RESUBMIT':
+            if task.user != user:
+                return Response({"error": "Only task owner can resubmit"}, status=403)
+            serializer.validated_data['status'] = in_progress
+            serializer.validated_data['l1_approved_at'] = None
+            serializer.validated_data['l2_approved_at'] = None
+            serializer.validated_data['l1_status'] = None
+            serializer.validated_data['l2_status'] = None
+            serializer.validated_data['l1_approver'] = task.user.first_level_manager
+            serializer.validated_data['l2_approver'] = task.user.second_level_manager
+
+        else:
+            return Response({"error": "Invalid action"}, status=400)
+
+        serializer.validated_data['last_modified_by'] = user
+        updated_task = serializer.save()
+
+        # Log audit
+        new_values = {
+            'status': updated_task.status.name if updated_task.status else None,
+            'l1_status': 'APPROVED' if updated_task.l1_approved_at else ('REJECTED' if updated_task.l1_rejected_at else None),
+            'l2_status': 'APPROVED' if updated_task.l2_approved_at else ('REJECTED' if updated_task.l2_rejected_at else None),
+        }
+        self._create_audit_log(updated_task, action, old_values=old_values, new_values=new_values)
+
+        return Response(self.serializer_class(updated_task).data, status=200)
+
+    def _create_audit_log(self, task, action, old_values=None, new_values=None):
+        TaskListAuditLog.objects.create(
+            task=task,
+            action=action,
+            performed_by=self.request.user,
+            old_values=old_values or {},
+            new_values=new_values or {},
+            ip_address=self._get_client_ip(self.request),
+            user_agent=self.request.META.get('HTTP_USER_AGENT', ''),
+            l1_status=task.l1_status,
+            l2_status=task.l2_status,
+            l1_action_by=task.l1_approver,
+            l1_action_at=task.l1_approved_at,
+            l2_action_by=task.l2_approver,
+            l2_action_at=task.l2_approved_at,
+            l1_rejected_at=task.l1_rejected_at,
+            l2_rejected_at=task.l2_rejected_at,
+        )
+
+    def _get_client_ip(self, request):
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            return x_forwarded_for.split(',')[0].strip()
+        return request.META.get('REMOTE_ADDR', '')
+    
+class BulkTaskListUpdate(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            data = request.data
+            task_ids = data.get("taskids", [])
+            action = data.get("action")
+            remarks = data.get("remarks", "")
+            user = request.user
+
+            # ✅ Validate input
+            if not task_ids:
+                return Response({"error": "taskids is required"}, status=400)
+
+            VALID_ACTIONS = [
+                'L1_APPROVE', 'L2_APPROVE',
+                'L1_REJECT', 'L2_REJECT',
+                'RESUBMIT'
+            ]
+
+            if action not in VALID_ACTIONS:
+                return Response({"error": "Invalid action"}, status=400)
+
+            tasks = TaskList.objects.filter(id__in=task_ids)
+
+            if not tasks.exists():
+                return Response({"error": "No valid tasks found"}, status=404)
+
+            updated_tasks = []
+            failed_tasks = []
+
+            # Status objects
+            in_progress = Status.objects.filter(name__iexact='In Progress').first()
+            completed = Status.objects.filter(name__iexact='Completed').first()
+            rejected = Status.objects.filter(name__iexact='Rejected').first()
+
+            # ✅ Transaction safety
+            with transaction.atomic():
+
+                for task in tasks:
+
+                    # ✅ Permission check (same as your get_object)
+                    if not (
+                        task.user == user or
+                        task.l1_approver_id == user.id or
+                        task.l2_approver_id == user.id or
+                        user.is_staff
+                    ):
+                        failed_tasks.append({
+                            "task_id": task.id,
+                            "reason": "Permission denied"
+                        })
+                        continue
+
+                    # Capture old values
+                    old_values = {
+                        'status': task.status.name if task.status else None,
+                        'l1_status': 'APPROVED' if task.l1_approved_at else ('REJECTED' if task.l1_rejected_at else None),
+                        'l2_status': 'APPROVED' if task.l2_approved_at else ('REJECTED' if task.l2_rejected_at else None),
+                    }
+
+                    try:
+                        # ---------------- ACTION LOGIC ----------------
+
+                        if action == 'L1_APPROVE':
+                            if task.l1_approver_id != user.id:
+                                raise Exception("Not L1 approver")
+
+                            task.l1_approved_at = timezone.now()
+                            task.l1_status = 'APPROVED'
+
+                            if task.status and task.status.name.lower() == 'draft':
+                                task.status = in_progress
+
+                            task.l2_approver = task.user.second_level_manager
+
+                        elif action == 'L2_APPROVE':
+                            if task.l2_approver_id != user.id:
+                                raise Exception("Not L2 approver")
+
+                            task.l2_approved_at = timezone.now()
+                            task.l2_status = 'APPROVED'
+                            task.status = completed
+
+                        elif action == 'L1_REJECT':
+                            if task.l1_approver_id != user.id:
+                                raise Exception("Not L1 approver")
+
+                            task.l1_rejected_at = timezone.now()
+                            task.l1_status = 'REJECTED'
+                            task.status = rejected
+
+                        elif action == 'L2_REJECT':
+                            if task.l2_approver_id != user.id:
+                                raise Exception("Not L2 approver")
+
+                            task.l2_rejected_at = timezone.now()
+                            task.l2_status = 'REJECTED'
+                            task.status = rejected
+
+                        elif action == 'RESUBMIT':
+                            if task.user != user:
+                                raise Exception("Only owner can resubmit")
+
+                            task.status = in_progress
+                            task.l1_approved_at = None
+                            task.l2_approved_at = None
+                            task.l1_rejected_at = None
+                            task.l2_rejected_at = None
+                            task.l1_status = None
+                            task.l2_status = None
+                            task.l1_approver = task.user.first_level_manager
+                            task.l2_approver = task.user.second_level_manager
+
+                        # Update modifier
+                        task.last_modified_by = user
+                        task.save()
+
+                        # Capture new values
+                        new_values = {
+                            'status': task.status.name if task.status else None,
+                            'l1_status': task.l1_status,
+                            'l2_status': task.l2_status,
+                        }
+
+                        # ✅ Audit log (same style as your API)
+                        TaskListAuditLog.objects.create(
+                            task=task,
+                            action=action,
+                            performed_by=user,
+                            old_values=old_values,
+                            new_values=new_values,
+                            remarks=remarks or f"Bulk {action.lower()}",
+                        )
+
+                        updated_tasks.append(task.id)
+
+                    except Exception as e:
+                        failed_tasks.append({
+                            "task_id": task.id,
+                            "reason": str(e)
+                        })
+
+            return Response({
+                "message": "Bulk action completed",
+                "success_count": len(updated_tasks),
+                "failed_count": len(failed_tasks),
+                "updated_task_ids": updated_tasks,
+                "failed_tasks": failed_tasks
+            }, status=200)
+
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+        
+class TaskApproverAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
