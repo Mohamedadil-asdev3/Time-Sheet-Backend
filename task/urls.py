@@ -8,7 +8,7 @@ from django.urls import path
 from .views import (
 TaskListAPIView,TaskListAuditLogAPIView,SimpleTimeLogView,TimeLogStatsAPIView,DailyTimelineAPIView,WorkHoursOverviewAPIView,TopMembersAPIView,TaskApprovalAPIView,
 TimeDistributionAPIView,RecentTasksAPIView,TopUsedTasksAPIView,TopPlatformsAPIView,PlatformPerformanceAPIView,ProfileAPIView,ApprovalTableAPIView,
- RecentRequestAPIView,ApprovalStatusOverviewAPIView,TaskCountsAPIView,TaskStatusOverviewAPIView,TimeDistributionByMembersAPIView,TaskCompletionSimpleAPIView
+ RecentRequestAPIView,ApprovalStatusOverviewAPIView,TaskCountsAPIView,TaskStatusOverviewAPIView,TimeDistributionByMembersAPIView,TaskCompletionSimpleAPIView,BulkTaskListUpdate,TaskActionAPIView
 
 )
 
@@ -45,7 +45,9 @@ urlpatterns = [
     path("approval-table/", ApprovalTableAPIView.as_view(), name="approval-table"),
     # path("approval-table/throw/", ApprovalTablethrowAPIView.as_view(), name="approval-table"),
     path("recent-apprpoval-request/",RecentRequestAPIView.as_view(),name="recent-approval"),
-    
+    path('bulkapproval/',BulkTaskListUpdate.as_view(),name='Bulk-update'),
+    path('tasks/<int:pk>/action/', TaskActionAPIView.as_view(), name='task-action'),
+
 
     
 ]
