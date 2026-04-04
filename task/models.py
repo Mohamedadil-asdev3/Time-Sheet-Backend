@@ -298,3 +298,19 @@ class TaskListAuditLog(models.Model):
 #     class Meta:
 #         db_table = "task_list_audit_log"
 #         ordering = ["-created_at"]
+
+
+class TicketEmailTemplate(models.Model):
+    id = models.AutoField(primary_key=True)
+    email_event = models.CharField(max_length=45)
+    email_template = models.TextField()  # longtext → TextField in Django
+    is_active = models.CharField(max_length=25, default='Y')
+
+    class Meta:
+        db_table = 'ticket_email_templates'
+        verbose_name = 'Ticket Email Template'
+        verbose_name_plural = 'Ticket Email Templates'
+
+    def __str__(self):
+        return f"{self.email_event} ({'Active' if self.is_active == 'Y' else 'Inactive'})"
+    

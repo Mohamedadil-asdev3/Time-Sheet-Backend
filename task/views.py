@@ -18,6 +18,7 @@ from django.utils import timezone
 from dateutil.relativedelta import relativedelta
 from collections import defaultdict
 from django.db import transaction   
+from .email import send_task_email
 User = get_user_model()
 
 class IsOwnerOrStaffApprover(IsAuthenticated):
@@ -536,6 +537,22 @@ class TaskListAPIView(APIView):
                 remarks="Bulk task created" if is_bulk else "Task created"
             )
 
+            # =========================================
+            # 🚀 EMAIL TRIGGER LOGIC (IMPORTANT)
+            # =========================================
+            status_name = (task.status.name or "").lower().strip()
+
+            # ✅ Only send email if NOT draft
+            if status_name in ['in progress', 'submitted']:
+                if task.l1_approver:
+                    print("[EMAIL TRIGGER] Sending to L1 Approver")
+                    send_task_email(
+                        event="TASK_SUBMITTED",
+                        task=task,
+                        recipient=task.l1_approver
+                    )
+
+
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     # def put(self, request, pk):
@@ -797,6 +814,23 @@ class TaskListAPIView(APIView):
  
         # Capture new values for audit
         new_values = self.serializer_class(updated_task).data
+
+                # =========================================
+        # 🚀 EMAIL TRIGGER (PUT - SUBMIT CASE)
+        # =========================================
+        old_status = (old_values.get('status_name') or "").lower()                              
+        new_status = (updated_task.status.name or "").lower()
+
+        # ✅ Trigger only when moving to In Progress
+        if old_status == 'draft' and new_status == 'in progress':
+            if updated_task.l1_approver:
+                print(f"[EMAIL TRIGGER - PUT] Task {updated_task.id} submitted")
+
+                send_task_email(
+                    event="TASK_SUBMITTED",
+                    task=updated_task,
+                    recipient=updated_task.l1_approver
+                )
  
         log_action = action if action in ['L1_APPROVE', 'L2_APPROVE', 'L1_REJECT', 'L2_REJECT', 'RESUBMIT'] else 'UPDATE'
         remarks = request.data.get('remarks') or f"Task {log_action.lower()}d"
@@ -2974,8 +3008,149 @@ class ProfileAPIView(APIView):
 #         return Response(response_data)
     
     
+# class ApprovalTableAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def get(self, request):
+#         user = request.user
+
+#         # Filter tasks where current user is either L1 or L2 approver
+#         queryset = TaskList.objects.select_related(
+#             "user",
+#             "status",
+#             "platform",
+#             "task",
+#             "subtask",
+#             "user__department",
+#             "user__location"
+#         ).filter(
+#             Q(l1_approver=user) | Q(l2_approver=user)
+#         ).all()
+
+#         status_map = {
+#             "submited": "Submitted",
+#             "approved": "Approved",
+#             "rejected": "Rejected",
+#             "completed": "Completed",
+#         }
+
+#         # Structure: status -> date -> unique owners with their tasks
+#         grouped = defaultdict(lambda: defaultdict(dict))
+
+#         for task in queryset:
+#             status_name = task.get_status_lower()
+            
+#             if not status_name:
+#                 continue
+
+#             key = status_name.replace(" ", "").lower()
+
+#             if key not in status_map:
+#                 continue
+
+#             date_key = task.date.strftime("%d %b %Y")
+#             owner_name = task.user.realname or task.user.name
+            
+#             # Create owner key for deduplication
+#             if owner_name not in grouped[key][date_key]:
+#                 # First time seeing this owner on this date
+#                 grouped[key][date_key][owner_name] = {
+#                     "owner": owner_name,
+#                     "role": task.user.designation or "N/A",
+#                     "department": task.user.department.name if task.user.department else "N/A",
+#                     "location": (
+#                         task.user.location.name
+#                         if task.user.location else task.user.location_name or "N/A"
+#                     ),
+#                     "date": date_key,
+#                     "tasks": []
+#                 }
+            
+#             # Determine approver level for this task
+#             approver_level = None
+#             if task.l1_approver == user:
+#                 approver_level = "L1"
+#             elif task.l2_approver == user:
+#                 approver_level = "L2"
+            
+#             # Add task details to the owner's task list
+#             grouped[key][date_key][owner_name]["tasks"].append({
+#                 "id": task.id,
+#                 "platform": task.platform.name if task.platform else "N/A",
+#                 "task_name": task.task.name if task.task else "N/A",
+#                 "subtask_name": task.subtask.name if task.subtask else "N/A",
+#                 "duration": str(task.duration),
+#                 "description": task.description or "",
+#                 "status": status_name,
+#                 "bitrix_id": task.bitrix_id,
+#                 "l1_approver": task.l1_approver.realname if task.l1_approver else None,
+#                 "l2_approver": task.l2_approver.realname if task.l2_approver else None,
+#                 "approver_level": approver_level,  # Add which level approver is viewing
+#                 "created_at": task.created_at.strftime("%d %b %Y %H:%M") if task.created_at else None,
+#                 "updated_at": task.updated_at.strftime("%d %b %Y %H:%M") if task.updated_at else None,
+#             })
+
+#         response_data = []
+
+#         for key, title in status_map.items():
+#             if key in grouped:
+#                 all_rows = []
+#                 total_count = 0
+                
+#                 # Sort dates in descending order (latest first)
+#                 sorted_dates = sorted(grouped[key].keys(), reverse=True)
+                
+#                 for date in sorted_dates:
+#                     # Get unique owners for this date
+#                     owners = list(grouped[key][date].values())
+                    
+#                     # Sort owners alphabetically by name
+#                     owners.sort(key=lambda x: x["owner"])
+                    
+#                     all_rows.extend(owners)
+#                     total_count += len(owners)
+                
+#                 response_data.append({
+#                     "title": title,
+#                     "count": total_count,
+#                     "rows": all_rows
+#                 })
+#             else:
+#                 response_data.append({
+#                     "title": title,
+#                     "count": 0,
+#                     "rows": []
+#                 })
+
+#         return Response(response_data)
 class ApprovalTableAPIView(APIView):
     permission_classes = [IsAuthenticated]
+
+    def get_approval_status_for_user(self, task, user):
+        """
+        Determine what status the task should show to the current approver.
+        """
+        # L1 approver view
+        if task.l1_approver == user:
+            if task.l1_approved_at:
+                return "Approved"
+            elif task.l1_rejected_at:
+                return "Rejected"
+            else:
+                return "Submitted"
+
+        # L2 approver view
+        if task.l2_approver == user:
+            if task.l2_approved_at:
+                return "Approved"
+            elif task.l2_rejected_at:
+                return "Rejected"
+            elif task.l1_approved_at:
+                return "Submitted"  # Waiting for L2 approval
+            else:
+                return None  # Not yet visible to L2
+
+        return None
 
     def get(self, request):
         user = request.user
@@ -2994,32 +3169,25 @@ class ApprovalTableAPIView(APIView):
         ).all()
 
         status_map = {
-            "submited": "Submitted",
+            "submitted": "Submitted",
             "approved": "Approved",
             "rejected": "Rejected",
             "completed": "Completed",
         }
 
-        # Structure: status -> date -> unique owners with their tasks
         grouped = defaultdict(lambda: defaultdict(dict))
 
         for task in queryset:
-            status_name = task.get_status_lower()
-            
+            status_name = self.get_approval_status_for_user(task, user)
+
             if not status_name:
-                continue
+                continue  # Skip tasks not relevant to this approver
 
             key = status_name.replace(" ", "").lower()
-
-            if key not in status_map:
-                continue
-
             date_key = task.date.strftime("%d %b %Y")
             owner_name = task.user.realname or task.user.name
-            
-            # Create owner key for deduplication
+
             if owner_name not in grouped[key][date_key]:
-                # First time seeing this owner on this date
                 grouped[key][date_key][owner_name] = {
                     "owner": owner_name,
                     "role": task.user.designation or "N/A",
@@ -3031,15 +3199,9 @@ class ApprovalTableAPIView(APIView):
                     "date": date_key,
                     "tasks": []
                 }
-            
-            # Determine approver level for this task
-            approver_level = None
-            if task.l1_approver == user:
-                approver_level = "L1"
-            elif task.l2_approver == user:
-                approver_level = "L2"
-            
-            # Add task details to the owner's task list
+
+            approver_level = "L1" if task.l1_approver == user else "L2"
+
             grouped[key][date_key][owner_name]["tasks"].append({
                 "id": task.id,
                 "platform": task.platform.name if task.platform else "N/A",
@@ -3051,7 +3213,7 @@ class ApprovalTableAPIView(APIView):
                 "bitrix_id": task.bitrix_id,
                 "l1_approver": task.l1_approver.realname if task.l1_approver else None,
                 "l2_approver": task.l2_approver.realname if task.l2_approver else None,
-                "approver_level": approver_level,  # Add which level approver is viewing
+                "approver_level": approver_level,
                 "created_at": task.created_at.strftime("%d %b %Y %H:%M") if task.created_at else None,
                 "updated_at": task.updated_at.strftime("%d %b %Y %H:%M") if task.updated_at else None,
             })
@@ -3062,20 +3224,16 @@ class ApprovalTableAPIView(APIView):
             if key in grouped:
                 all_rows = []
                 total_count = 0
-                
-                # Sort dates in descending order (latest first)
+
+                # Sort dates descending
                 sorted_dates = sorted(grouped[key].keys(), reverse=True)
-                
+
                 for date in sorted_dates:
-                    # Get unique owners for this date
                     owners = list(grouped[key][date].values())
-                    
-                    # Sort owners alphabetically by name
                     owners.sort(key=lambda x: x["owner"])
-                    
                     all_rows.extend(owners)
                     total_count += len(owners)
-                
+
                 response_data.append({
                     "title": title,
                     "count": total_count,
@@ -5193,105 +5351,201 @@ class BulkTaskListUpdate(APIView):
  
 #         return Response(new_values, status=200)
 
+# class TaskActionAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+ 
+#     def post(self, request, pk):
+#         task = get_object_or_404(TaskList, pk=pk)
+#         user = request.user
+#         action = request.data.get('action')
+ 
+#         if not action:
+#             return Response({"error": "Action is required"}, status=400)
+ 
+#         # ✅ Fetch statuses safely
+#         approved = Status.objects.filter(name__iexact='Approved').first()
+#         completed = Status.objects.filter(name__iexact='Completed').first()
+#         rejected = Status.objects.filter(name__iexact='Rejected').first()
+ 
+#         # 🚨 Fail fast if missing
+#         if not approved or not completed or not rejected:
+#             return Response(
+#                 {"error": "One or more statuses not found in DB"},
+#                 status=500
+#             )
+ 
+#         old_values = TaskListSerializer(task).data
+ 
+#         # -------------------- ACTIONS --------------------
+ 
+#         # ✅ L1 APPROVE
+#         if action == 'L1_APPROVE':
+#             if task.l1_approver != user:
+#                 return Response(
+#                     {"error": "Only L1 approver can approve"},
+#                     status=403
+#                 )
+ 
+#             task.l1_approved_at = timezone.now()
+#             task.l1_status = 'APPROVED'
+ 
+#             # Assign L2 if exists
+#             if task.user.second_level_manager:
+#                 task.l2_approver = task.user.second_level_manager
+ 
+#             # ✅ FIX: set Approved
+#             task.status = approved
+ 
+ 
+#         # ✅ L2 APPROVE
+#         elif action == 'L2_APPROVE':
+#             if task.l2_approver != user:
+#                 return Response(
+#                     {"error": "Only L2 approver can approve"},
+#                     status=403
+#                 )
+ 
+#             task.l2_approved_at = timezone.now()
+#             task.l2_status = 'APPROVED'
+ 
+#             # ✅ Completed
+#             task.status = completed
+ 
+ 
+#         # ✅ L1 REJECT
+#         elif action == 'L1_REJECT':
+#             if task.l1_approver != user:
+#                 return Response(
+#                     {"error": "Only L1 approver can reject"},
+#                     status=403
+#                 )
+ 
+#             task.l1_rejected_at = timezone.now()
+#             task.l1_status = 'REJECTED'
+#             task.status = rejected
+ 
+ 
+#         # ✅ L2 REJECT
+#         elif action == 'L2_REJECT':
+#             if task.l2_approver != user:
+#                 return Response(
+#                     {"error": "Only L2 approver can reject"},
+#                     status=403
+#                 )
+ 
+#             task.l2_rejected_at = timezone.now()
+#             task.l2_status = 'REJECTED'
+#             task.status = rejected
+ 
+ 
+#         else:
+#             return Response({"error": "Invalid action"}, status=400)
+ 
+#         # -------------------- SAVE --------------------
+#         task.last_modified_by = user
+#         task.save()
+ 
+#         # 🔥 Ensure latest DB value
+#         task.refresh_from_db()
+ 
+#         new_values = TaskListSerializer(task).data
+ 
+#         # -------------------- AUDIT --------------------
+#         TaskListAuditLog.objects.create(
+#             task=task,
+#             action=action,
+#             performed_by=user,
+#             old_values=old_values,
+#             new_values=new_values,
+#             remarks=request.data.get('remarks', f"{action} performed")
+#         )
+ 
+#         return Response(new_values, status=200)
 class TaskActionAPIView(APIView):
     permission_classes = [IsAuthenticated]
- 
+
     def post(self, request, pk):
         task = get_object_or_404(TaskList, pk=pk)
         user = request.user
         action = request.data.get('action')
- 
+
         if not action:
             return Response({"error": "Action is required"}, status=400)
- 
-        # ✅ Fetch statuses safely
+
+        # Fetch statuses
         approved = Status.objects.filter(name__iexact='Approved').first()
         completed = Status.objects.filter(name__iexact='Completed').first()
         rejected = Status.objects.filter(name__iexact='Rejected').first()
- 
-        # 🚨 Fail fast if missing
+
         if not approved or not completed or not rejected:
-            return Response(
-                {"error": "One or more statuses not found in DB"},
-                status=500
-            )
- 
+            return Response({"error": "One or more statuses not found in DB"}, status=500)
+
         old_values = TaskListSerializer(task).data
- 
+
         # -------------------- ACTIONS --------------------
- 
-        # ✅ L1 APPROVE
         if action == 'L1_APPROVE':
             if task.l1_approver != user:
-                return Response(
-                    {"error": "Only L1 approver can approve"},
-                    status=403
-                )
- 
+                return Response({"error": "Only L1 approver can approve"}, status=403)
             task.l1_approved_at = timezone.now()
             task.l1_status = 'APPROVED'
- 
-            # Assign L2 if exists
             if task.user.second_level_manager:
                 task.l2_approver = task.user.second_level_manager
- 
-            # ✅ FIX: set Approved
             task.status = approved
- 
- 
-        # ✅ L2 APPROVE
+
         elif action == 'L2_APPROVE':
             if task.l2_approver != user:
-                return Response(
-                    {"error": "Only L2 approver can approve"},
-                    status=403
-                )
- 
+                return Response({"error": "Only L2 approver can approve"}, status=403)
             task.l2_approved_at = timezone.now()
             task.l2_status = 'APPROVED'
- 
-            # ✅ Completed
             task.status = completed
- 
- 
-        # ✅ L1 REJECT
+
         elif action == 'L1_REJECT':
             if task.l1_approver != user:
-                return Response(
-                    {"error": "Only L1 approver can reject"},
-                    status=403
-                )
- 
+                return Response({"error": "Only L1 approver can reject"}, status=403)
             task.l1_rejected_at = timezone.now()
             task.l1_status = 'REJECTED'
             task.status = rejected
- 
- 
-        # ✅ L2 REJECT
+
         elif action == 'L2_REJECT':
             if task.l2_approver != user:
-                return Response(
-                    {"error": "Only L2 approver can reject"},
-                    status=403
-                )
- 
+                return Response({"error": "Only L2 approver can reject"}, status=403)
             task.l2_rejected_at = timezone.now()
             task.l2_status = 'REJECTED'
             task.status = rejected
- 
- 
+
         else:
             return Response({"error": "Invalid action"}, status=400)
- 
+
         # -------------------- SAVE --------------------
         task.last_modified_by = user
         task.save()
- 
-        # 🔥 Ensure latest DB value
         task.refresh_from_db()
- 
+
+        # -------------------- EMAIL --------------------
+        email_sent = False
+        try:
+            if action == 'L1_APPROVE' and task.l2_approver:
+                email_sent = send_task_email(event="L1_APPROVED", task=task, recipient=task.l2_approver)
+            elif action == 'L2_APPROVE':
+                email_sent = send_task_email(event="TASK_COMPLETED", task=task, recipient=task.user)
+            elif action in ['L1_REJECT', 'L2_REJECT']:
+                email_sent = send_task_email(event="TASK_REJECTED", task=task, recipient=task.user)
+
+            print(f"[EMAIL STATUS] Email sent: {email_sent}")  # ✅ Print email status
+
+        except Exception as e:
+            print("[EMAIL ERROR IN ACTION API]", str(e))
+
+        # -------------------- RESPONSE --------------------
         new_values = TaskListSerializer(task).data
- 
+        new_values['email_sent'] = email_sent
+
+        # Include approver names
+        if task.l1_approver:
+            new_values['l1_approver_name'] = getattr(task.l1_approver, 'firstname', None) or getattr(task.l1_approver, 'username', None)
+        if task.l2_approver:
+            new_values['l2_approver_name'] = getattr(task.l2_approver, 'firstname', None) or getattr(task.l2_approver, 'username', None)
+
         # -------------------- AUDIT --------------------
         TaskListAuditLog.objects.create(
             task=task,
@@ -5301,5 +5555,5 @@ class TaskActionAPIView(APIView):
             new_values=new_values,
             remarks=request.data.get('remarks', f"{action} performed")
         )
- 
+
         return Response(new_values, status=200)
