@@ -382,7 +382,16 @@ class TaskListAPIView(APIView):
 
     def apply_filters(self, request, queryset):
         params = request.query_params
-        
+        user_id = params.get('user_id')
+
+    # ✅ User ID filter (secure handling)
+        if user_id:
+            if request.user.is_staff:
+                queryset = queryset.filter(user_id=user_id)
+            elif str(request.user.id) == user_id:
+                queryset = queryset.filter(user_id=request.user.id)
+            else:
+                return queryset.none() 
         # Staff can filter by user_id
         if params.get('user_id') and request.user.is_staff:
             queryset = queryset.filter(user_id=params['user_id'])
@@ -400,7 +409,7 @@ class TaskListAPIView(APIView):
             queryset = queryset.filter(task_id=params['task'])
         if params.get('status'):
             queryset = queryset.filter(status_id=params['status'])
-        
+       
         # Search filter
         if search := params.get('search'):
             queryset = queryset.filter(
@@ -426,6 +435,37 @@ class TaskListAPIView(APIView):
         
     #     serializer = self.serializer_class(qs, many=True)
     #     return Response(serializer.data)
+    # def get(self, request, pk=None):
+    #     if pk:
+    #         task = self.get_object(pk)
+    #         return Response(self.serializer_class(task).data)
+
+    #     qs = self.get_queryset()
+    #     qs = self.apply_filters(request, qs)
+        
+    #     qs = qs.order_by('id')
+        
+    #     # Debug: Print count
+    #     print(f"Total tasks found: {qs.count()}")
+        
+    #     # Group tasks by date using defaultdict
+    #     grouped_data = defaultdict(list)
+        
+    #     for task in qs:
+    #         task_data = self.serializer_class(task).data
+    #         date_str = task.date.strftime('%Y-%m-%d')
+    #         grouped_data[date_str].append(task_data)
+        
+    #     # Convert to list of dictionaries
+    #     response_data = [
+    #         {'date': date, 'tasks': tasks} 
+    #         for date, tasks in grouped_data.items()
+    #     ]
+        
+    #     # Sort by date descending
+    #     response_data.sort(key=lambda x: x['date'], reverse=True)
+        
+    #     return Response(response_data)
     def get(self, request, pk=None):
         if pk:
             task = self.get_object(pk)
@@ -433,29 +473,33 @@ class TaskListAPIView(APIView):
 
         qs = self.get_queryset()
         qs = self.apply_filters(request, qs)
-        
-        # Debug: Print count
+
+        qs = qs.order_by('id')
+
         print(f"Total tasks found: {qs.count()}")
-        
-        # Group tasks by date using defaultdict
+
         grouped_data = defaultdict(list)
-        
+
         for task in qs:
             task_data = self.serializer_class(task).data
             date_str = task.date.strftime('%Y-%m-%d')
             grouped_data[date_str].append(task_data)
-        
-        # Convert to list of dictionaries
+
+        # ✅ Ensure TODAY is always present
+        today_str = date.today().strftime('%Y-%m-%d')
+        if today_str not in grouped_data:
+            grouped_data[today_str] = []
+
+        # Convert to list
         response_data = [
-            {'date': date, 'tasks': tasks} 
-            for date, tasks in grouped_data.items()
+            {'date': date_key, 'tasks': tasks}
+            for date_key, tasks in grouped_data.items()
         ]
-        
+
         # Sort by date descending
         response_data.sort(key=lambda x: x['date'], reverse=True)
-        
-        return Response(response_data)
 
+        return Response(response_data)
     def post(self, request):
         if request.user.is_staff:
             return Response(
