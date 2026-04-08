@@ -3861,6 +3861,181 @@ from django.utils import timezone
 from datetime import datetime, timedelta
 from .models import TaskList, Status, User
 
+class UserTaskCountsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    def parse_duration_to_hours(self, duration_str):
+        """Convert duration string like '1h 30m' to decimal hours (1.5)"""
+        if not duration_str:
+            return 0
+        
+        if isinstance(duration_str, (int, float)):
+            return float(duration_str)
+        
+        duration_str = str(duration_str).strip()
+        
+        try:
+            return float(duration_str)
+        except ValueError:
+            pass
+        
+        hours = 0
+        minutes = 0
+        
+        hour_match = re.search(r'(\d+(?:\.\d+)?)\s*h', duration_str, re.IGNORECASE)
+        if hour_match:
+            hours = float(hour_match.group(1))
+        
+        minute_match = re.search(r'(\d+(?:\.\d+)?)\s*m', duration_str, re.IGNORECASE)
+        if minute_match:
+            minutes = float(minute_match.group(1))
+        
+        if not hour_match and not minute_match:
+            try:
+                return float(duration_str)
+            except ValueError:
+                return 0
+        
+        return hours + (minutes / 60)
+    
+    def format_hours_to_duration(self, hours):
+        """Convert decimal hours (2.5) to readable format like '2h 30m'"""
+        if not hours or hours == 0:
+            return "0h"
+        
+        total_minutes = int(hours * 60)
+        h = total_minutes // 60
+        m = total_minutes % 60
+        
+        if h > 0 and m > 0:
+            return f"{h}h {m}m"
+        elif h > 0:
+            return f"{h}h"
+        else:
+            return f"{m}m"
+    
+    def aggregate_duration(self, queryset, date_range=None):
+        """Aggregate duration from string fields and return both decimal and formatted"""
+        if date_range:
+            queryset = queryset.filter(date__range=date_range)
+        
+        entries = queryset.values('duration')
+        total_hours = 0
+        
+        for entry in entries:
+            duration_str = entry['duration']
+            total_hours += self.parse_duration_to_hours(duration_str)
+        
+        return total_hours
+    
+    def get(self, request):
+        request_user = request.user
+        user_id = request.query_params.get('user_id')
+
+        # ✅ Decide which user data to fetch
+        if user_id:
+            try:
+                target_user = User.objects.get(id=user_id)
+            except User.DoesNotExist:
+                return Response({"error": "User not found"}, status=404)
+
+            # 🔐 सुरक्षा: only admin or same user
+            if not request_user.is_staff and request_user.id != target_user.id:
+                return Response({"error": "Permission denied"}, status=403)
+        else:
+            target_user = request_user
+
+        today = timezone.now().date()
+
+        queryset = TaskList.objects.select_related('status').filter(user=target_user)
+
+        in_progress_status = Status.objects.filter(name__iexact='In Progress').first()
+        completed_status = Status.objects.filter(name__iexact='Completed').first()
+        rejected_status = Status.objects.filter(name__iexact='Rejected').first()
+        draft_status = Status.objects.filter(name__iexact='Draft').first()
+
+        total_hours = self.aggregate_duration(queryset)
+        today_hours = self.aggregate_duration(queryset, [today, today])
+
+        total_tasks = queryset.count()
+        completed_tasks = queryset.filter(status=completed_status).count() if completed_status else 0
+        submitted_tasks = queryset.filter(status=in_progress_status).count() if in_progress_status else 0
+        rejected_tasks = queryset.filter(status=rejected_status).count() if rejected_status else 0
+        draft_tasks = queryset.filter(status=draft_status).count() if draft_status else 0
+
+        return Response({
+            "user": {
+                "id": target_user.id,
+                "name": target_user.firstname or target_user.name,
+                "email": target_user.email
+            },
+            "total_hours": self.format_hours_to_duration(total_hours),
+            "total_hours_decimal": round(total_hours, 2),
+            "today_hours": self.format_hours_to_duration(today_hours),
+            "today_hours_decimal": round(today_hours, 2),
+            "total_tasks": total_tasks,
+            "completed_tasks": completed_tasks,
+            "submitted_tasks": submitted_tasks,
+            "rejected_tasks": rejected_tasks,
+            "draft_tasks": draft_tasks,
+            "completion_percentage": round((completed_tasks / total_tasks * 100), 2) if total_tasks > 0 else 0
+        })
+
+
+class ApproverTaskCountsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        today = timezone.now().date()
+
+        l1_tasks = TaskList.objects.select_related('status').filter(l1_approver=user)
+        l2_tasks = TaskList.objects.select_related('status').filter(l2_approver=user)
+
+        in_progress_status = Status.objects.filter(name__iexact='In Progress').first()
+        completed_status = Status.objects.filter(name__iexact='Completed').first()
+
+        # L1
+        l1_total = l1_tasks.count()
+        l1_completed = l1_tasks.filter(status=completed_status).count() if completed_status else 0
+        l1_pending = l1_tasks.filter(
+            l1_approved_at__isnull=True,
+            l1_rejected_at__isnull=True
+        ).count()
+
+        l1_hours = self.aggregate_duration(l1_tasks)
+        l1_today_hours = self.aggregate_duration(l1_tasks, [today, today])
+
+        # L2
+        l2_total = l2_tasks.count()
+        l2_completed = l2_tasks.filter(status=completed_status).count() if completed_status else 0
+        l2_pending = l2_tasks.filter(
+            l2_approved_at__isnull=True,
+            l2_rejected_at__isnull=True
+        ).count()
+
+        l2_hours = self.aggregate_duration(l2_tasks)
+        l2_today_hours = self.aggregate_duration(l2_tasks, [today, today])
+
+        return Response({
+            "l1": {
+                "total_tasks": l1_total,
+                "completed_tasks": l1_completed,
+                "pending_approval": l1_pending,
+                "total_hours": self.format_hours_to_duration(l1_hours),
+                "today_hours": self.format_hours_to_duration(l1_today_hours),
+                "completion_percentage": round((l1_completed / l1_total * 100), 2) if l1_total > 0 else 0
+            },
+            "l2": {
+                "total_tasks": l2_total,
+                "completed_tasks": l2_completed,
+                "pending_approval": l2_pending,
+                "total_hours": self.format_hours_to_duration(l2_hours),
+                "today_hours": self.format_hours_to_duration(l2_today_hours),
+                "completion_percentage": round((l2_completed / l2_total * 100), 2) if l2_total > 0 else 0
+            },
+            "total_pending": l1_pending + l2_pending
+        })
+
 class TaskCountsAPIView(APIView):
     permission_classes = [IsAuthenticated]
     

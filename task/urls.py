@@ -8,7 +8,7 @@ from django.urls import path
 from .views import (
 TaskListAPIView,TaskListAuditLogAPIView,SimpleTimeLogView,TimeLogStatsAPIView,DailyTimelineAPIView,WorkHoursOverviewAPIView,TopMembersAPIView,TaskApprovalAPIView,
 TimeDistributionAPIView,RecentTasksAPIView,TopUsedTasksAPIView,TopPlatformsAPIView,PlatformPerformanceAPIView,ProfileAPIView,ApprovalTableAPIView,
- RecentRequestAPIView,ApprovalStatusOverviewAPIView,TaskCountsAPIView,TaskStatusOverviewAPIView,TimeDistributionByMembersAPIView,TaskCompletionSimpleAPIView,BulkTaskListUpdate,TaskActionAPIView
+ RecentRequestAPIView,ApprovalStatusOverviewAPIView,TaskCountsAPIView,UserTaskCountsAPIView,TaskStatusOverviewAPIView,TimeDistributionByMembersAPIView,TaskCompletionSimpleAPIView,BulkTaskListUpdate,TaskActionAPIView
 
 )
 
@@ -28,6 +28,7 @@ urlpatterns = [
     path('simple-time-logs/<int:pk>/', SimpleTimeLogView.as_view(), name='simple-time-log-detail'),
     path('time-logs/stats/', TimeLogStatsAPIView.as_view(), name='time-logs-stats'),
     path('tasks/counts/', TaskCountsAPIView.as_view(), name='task-counts'),
+    path('tasks/user-counts/', UserTaskCountsAPIView.as_view(), name='task-counts'),
     path('tasks/daily-timeline/', DailyTimelineAPIView.as_view(), name='daily-timeline'),
     path('tasks/status-overview/', TaskStatusOverviewAPIView.as_view(), name='task-status-overview'),
     path('work-hours/', WorkHoursOverviewAPIView.as_view(), name='work-hours'),
