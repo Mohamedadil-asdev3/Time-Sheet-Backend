@@ -47,7 +47,5 @@ urlpatterns = [
     path("recent-apprpoval-request/",RecentRequestAPIView.as_view(),name="recent-approval"),
     path('bulkapproval/',BulkTaskListUpdate.as_view(),name='Bulk-update'),
     path('tasks/<int:pk>/action/', TaskActionAPIView.as_view(), name='task-action'),
-
-
-    
+   
 ]

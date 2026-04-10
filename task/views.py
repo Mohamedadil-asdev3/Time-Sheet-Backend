@@ -858,51 +858,187 @@ class TaskListAPIView(APIView):
         )
         task.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
-
+    
 class TaskApprovalAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
-
-        # ------------------- PENDING -------------------
-        pending_tasks = TaskList.objects.filter(
-            Q(
-                l1_approver=user,
-                l1_approved_at__isnull=True,
-                l1_rejected_at__isnull=True
-            ) |
-            Q(
-                l2_approver=user,
-                l1_approved_at__isnull=False,
-                l2_approved_at__isnull=True,
-                l2_rejected_at__isnull=True
+        
+        # Get user_id parameter for staff users
+        user_id = request.query_params.get('user_id')
+        
+        # Permission check for user_id parameter
+        if user_id and not user.is_staff:
+            return Response(
+                {"error": "You don't have permission to view other users' approval tasks"},
+                status=status.HTTP_403_FORBIDDEN
             )
-        )
 
-        # ------------------- APPROVED -------------------
-        approved_tasks = TaskList.objects.filter(
-            Q(l1_approver=user, l1_approved_at__isnull=False) |
-            Q(l2_approver=user, l2_approved_at__isnull=False)
-        )
+        # Base queryset for pending tasks
+        if user.is_staff and user_id:
+            # Staff viewing specific user's approval tasks
+            target_user = None
+            try:
+                from django.contrib.auth import get_user_model
+                User = get_user_model()
+                target_user = User.objects.get(id=user_id)
+            except User.DoesNotExist:
+                return Response(
+                    {"error": f"User with id {user_id} not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            pending_tasks = TaskList.objects.filter(
+                Q(
+                    l1_approver=target_user,
+                    l1_approved_at__isnull=True,
+                    l1_rejected_at__isnull=True
+                ) |
+                Q(
+                    l2_approver=target_user,
+                    l1_approved_at__isnull=False,
+                    l2_approved_at__isnull=True,
+                    l2_rejected_at__isnull=True
+                )
+            )
+            
+            approved_tasks = TaskList.objects.filter(
+                Q(l1_approver=target_user, l1_approved_at__isnull=False) |
+                Q(l2_approver=target_user, l2_approved_at__isnull=False)
+            )
+            
+            rejected_tasks = TaskList.objects.filter(
+                Q(l1_approver=target_user, l1_rejected_at__isnull=False) |
+                Q(l2_approver=target_user, l2_rejected_at__isnull=False)
+            )
+        else:
+            # Current user's approval tasks
+            pending_tasks = TaskList.objects.filter(
+                Q(
+                    l1_approver=user,
+                    l1_approved_at__isnull=True,
+                    l1_rejected_at__isnull=True
+                ) |
+                Q(
+                    l2_approver=user,
+                    l1_approved_at__isnull=False,
+                    l2_approved_at__isnull=True,
+                    l2_rejected_at__isnull=True
+                )
+            )
 
-        # ------------------- REJECTED -------------------
-        rejected_tasks = TaskList.objects.filter(
-            Q(l1_approver=user, l1_rejected_at__isnull=False) |
-            Q(l2_approver=user, l2_rejected_at__isnull=False)
-        )
+            approved_tasks = TaskList.objects.filter(
+                Q(l1_approver=user, l1_approved_at__isnull=False) |
+                Q(l2_approver=user, l2_approved_at__isnull=False)
+            )
+
+            rejected_tasks = TaskList.objects.filter(
+                Q(l1_approver=user, l1_rejected_at__isnull=False) |
+                Q(l2_approver=user, l2_rejected_at__isnull=False)
+            )
+
+        # Helper function to serialize tasks with limited fields
+        def serialize_task(task, role):
+            # Determine the role (L1 or L2 approver)
+            if task.l1_approver == (target_user if user.is_staff and user_id else user):
+                approver_role = "L1 Approver"
+            elif task.l2_approver == (target_user if user.is_staff and user_id else user):
+                approver_role = "L2 Approver"
+            else:
+                approver_role = role
+            
+            return {
+                # "task_name": task.task.name if task.task else "",
+                # "subtask_name": task.subtask.name if task.subtask else "",
+                "created_at": task.created_at.strftime("%Y-%m-%d %H:%M:%S") if task.created_at else "",
+                "updated_at": task.updated_at.strftime("%Y-%m-%d %H:%M:%S") if task.updated_at else "",
+                # "role": approver_role,
+                "created_by": {
+                    "id": task.user.id,
+                    "username": task.user.name,
+                    "first_name": task.user.firstname,
+                    "designation": task.user.designation,
+                    # "last_name": task.user.lastname
+                } if task.user else None
+            }
+
+        # Serialize tasks with limited fields
+        pending_serialized = [serialize_task(task, "Pending") for task in pending_tasks]
+        approved_serialized = [serialize_task(task, "Approved") for task in approved_tasks]
+        rejected_serialized = [serialize_task(task, "Rejected") for task in rejected_tasks]
 
         data = {
             "pending_count": pending_tasks.count(),
             "approved_count": approved_tasks.count(),
             "rejected_count": rejected_tasks.count(),
-
-            "pending_tasks": TaskListSerializer(pending_tasks, many=True).data,
-            "approved_tasks": TaskListSerializer(approved_tasks, many=True).data,
-            "rejected_tasks": TaskListSerializer(rejected_tasks, many=True).data,
+            "pending_tasks": pending_serialized,
+            "approved_tasks": approved_serialized,
+            "rejected_tasks": rejected_serialized,
         }
+        
+        # Add user info if filtering by user_id
+        if user_id and user.is_staff:
+            try:
+                from django.contrib.auth import get_user_model
+                User = get_user_model()
+                target_user = User.objects.get(id=user_id)
+                data["filtered_user"] = {
+                    "id": target_user.id,
+                    "username": target_user.name,
+                    "first_name": target_user.firstname,
+                    "designation": target_user.designation,
+                    # "last_name": target_user.last_name
+                }
+            except User.DoesNotExist:
+                pass
 
         return Response(data)
+
+# class TaskApprovalAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def get(self, request):
+#         user = request.user
+
+#         # ------------------- PENDING -------------------
+#         pending_tasks = TaskList.objects.filter(
+#             Q(
+#                 l1_approver=user,
+#                 l1_approved_at__isnull=True,
+#                 l1_rejected_at__isnull=True
+#             ) |
+#             Q(
+#                 l2_approver=user,
+#                 l1_approved_at__isnull=False,
+#                 l2_approved_at__isnull=True,
+#                 l2_rejected_at__isnull=True
+#             )
+#         )
+
+#         # ------------------- APPROVED -------------------
+#         approved_tasks = TaskList.objects.filter(
+#             Q(l1_approver=user, l1_approved_at__isnull=False) |
+#             Q(l2_approver=user, l2_approved_at__isnull=False)
+#         )
+
+#         # ------------------- REJECTED -------------------
+#         rejected_tasks = TaskList.objects.filter(
+#             Q(l1_approver=user, l1_rejected_at__isnull=False) |
+#             Q(l2_approver=user, l2_rejected_at__isnull=False)
+#         )
+
+#         data = {
+#             "pending_count": pending_tasks.count(),
+#             "approved_count": approved_tasks.count(),
+#             "rejected_count": rejected_tasks.count(),
+
+#             "pending_tasks": TaskListSerializer(pending_tasks, many=True).data,
+#             "approved_tasks": TaskListSerializer(approved_tasks, many=True).data,
+#             "rejected_tasks": TaskListSerializer(rejected_tasks, many=True).data,
+#         }
+
+#         return Response(data)
 
 class TaskListAuditLogAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -1131,7 +1267,6 @@ class TimeLogStatsAPIView(APIView):
             "statuses": result
         })
     
-
 class DailyTimelineAPIView(APIView):
     permission_classes = [IsAuthenticated]
     serializer_class = TaskListSerializer
@@ -1139,19 +1274,49 @@ class DailyTimelineAPIView(APIView):
     def get(self, request):
         today = timezone.localdate()
         user = request.user
+        
+        # Get user_id from query params
+        user_id = request.query_params.get('user_id')
 
         queryset = TaskList.objects.select_related(
             'platform', 'task', 'subtask', 'status',
             'l1_approver', 'l2_approver'
         ).filter(date=today)
 
-        # If not staff → show only own tasks
-        if not user.is_staff:
+        # Handle user filtering
+        if user.is_staff:
+            # Staff can filter by user_id if provided
+            if user_id:
+                queryset = queryset.filter(user_id=user_id)
+            # If no user_id, staff sees all tasks
+        else:
+            # Non-staff users can only see their own tasks
+            # Ignore user_id parameter if provided
             queryset = queryset.filter(user=user)
 
         queryset = queryset.order_by('created_at')
 
         return Response(self.serializer_class(queryset, many=True).data)
+# class DailyTimelineAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+#     serializer_class = TaskListSerializer
+
+#     def get(self, request):
+#         today = timezone.localdate()
+#         user = request.user
+
+#         queryset = TaskList.objects.select_related(
+#             'platform', 'task', 'subtask', 'status',
+#             'l1_approver', 'l2_approver'
+#         ).filter(date=today)
+
+#         # If not staff → show only own tasks
+#         if not user.is_staff:
+#             queryset = queryset.filter(user=user)
+
+#         queryset = queryset.order_by('created_at')
+
+#         return Response(self.serializer_class(queryset, many=True).data)
     
 
 # Work Hours Overview
@@ -1331,6 +1496,7 @@ class WorkHoursOverviewAPIView(APIView):
     • ?view=week&year=2026&week=6   → specific week
     • ?view=year          → current year (all 12 months summary)
     • ?view=year&year=2026   → specific year (all 12 months)
+    • ?user_id=5          → filter by specific user (staff only)
     """
     permission_classes = [IsAuthenticated]
 
@@ -1388,6 +1554,16 @@ class WorkHoursOverviewAPIView(APIView):
         user = request.user
         today = timezone.now().date()
 
+        # Get user_id parameter
+        user_id = request.query_params.get('user_id')
+        
+        # Permission check for user_id parameter
+        if user_id and not user.is_staff:
+            return Response(
+                {"error": "You don't have permission to view other users' work hours"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         view_mode = request.query_params.get('view', 'week').lower()
 
         if view_mode not in ['week', 'year']:
@@ -1431,10 +1607,34 @@ class WorkHoursOverviewAPIView(APIView):
             title_value = f"{year}-W{week_num:02d}"
             range_str = f"{start_date.isoformat()} to {end_date.isoformat()}"
 
-            # Get all entries in date range
+            # Get all entries in date range with user filter
             qs = TaskList.objects.filter(date__range=[start_date, end_date])
-            if not user.is_staff:
+            
+            # Apply user filters
+            if user.is_staff and user_id:
+                # Staff filtering by specific user
+                qs = qs.filter(user_id=user_id)
+            elif not user.is_staff:
+                # Non-staff users can only see their own entries
                 qs = qs.filter(user=user)
+            
+            # Get user info if user_id is provided
+            user_info = None
+            if user_id and user.is_staff:
+                try:
+                    target_user = User.objects.get(id=user_id)
+                    user_info = {
+                        "id": target_user.id,
+                        "username": target_user.name,
+                        "email": target_user.email,
+                        "first_name": target_user.firstname,
+                        # "last_name": target_user.last_name
+                    }
+                except User.DoesNotExist:
+                    return Response(
+                        {"error": f"User with id {user_id} not found"},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
 
             # Get all entries with their duration strings
             entries = qs.values('date', 'duration')
@@ -1469,8 +1669,8 @@ class WorkHoursOverviewAPIView(APIView):
                 days.append({
                     "day": day_names[i],
                     "date": current.isoformat(),
-                    "duration_hours": formatted_hours,  # Now returns "2h 30m" instead of "2.50"
-                    "duration_decimal": round(data['duration'], 2),  # Optional: keep decimal for calculations
+                    "duration_hours": formatted_hours,
+                    "duration_decimal": round(data['duration'], 2),
                     "entry_count": data['count']
                 })
 
@@ -1478,16 +1678,24 @@ class WorkHoursOverviewAPIView(APIView):
                 total_entries += data['count']
                 current += timedelta(days=1)
 
-            return Response({
+            response_data = {
                 "status": "success",
                 "view": "week",
                 title_key: title_value,
                 "date_range": range_str,
-                "total_hours": self.format_hours_to_duration(total_hours),  # Formatted total
-                "total_hours_decimal": round(total_hours, 2),  # Optional: decimal total
+                "total_hours": self.format_hours_to_duration(total_hours),
+                "total_hours_decimal": round(total_hours, 2),
                 "total_entries": total_entries,
                 "days": days
-            })
+            }
+            
+            # Add user info if filtering by user
+            if user_info:
+                response_data["user"] = user_info
+            elif user_id and user.is_staff:
+                response_data["user"] = {"message": f"User with id {user_id} not found"}
+
+            return Response(response_data)
 
         # ────────────────────────────────────────────────
         # YEAR VIEW - summary per month
@@ -1497,6 +1705,24 @@ class WorkHoursOverviewAPIView(APIView):
             yearly_total_hours = 0.0
             yearly_total_entries = 0
 
+            # Get user info if user_id is provided
+            user_info = None
+            if user_id and user.is_staff:
+                try:
+                    target_user = User.objects.get(id=user_id)
+                    user_info = {
+                        "id": target_user.id,
+                        "username": target_user.name,
+                        "email": target_user.email,
+                        "first_name": target_user.firstname,
+                        # "last_name": target_user.last_name
+                    }
+                except User.DoesNotExist:
+                    return Response(
+                        {"error": f"User with id {user_id} not found"},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+
             for m in range(1, 13):
                 try:
                     month_start = date(year, m, 1)
@@ -1505,9 +1731,15 @@ class WorkHoursOverviewAPIView(APIView):
                 except ValueError:
                     continue
 
-                # Get all entries for this month
+                # Get all entries for this month with user filter
                 qs = TaskList.objects.filter(date__range=[month_start, month_end])
-                if not user.is_staff:
+                
+                # Apply user filters
+                if user.is_staff and user_id:
+                    # Staff filtering by specific user
+                    qs = qs.filter(user_id=user_id)
+                elif not user.is_staff:
+                    # Non-staff users can only see their own entries
                     qs = qs.filter(user=user)
 
                 # Get all entries with their duration strings
@@ -1530,8 +1762,8 @@ class WorkHoursOverviewAPIView(APIView):
                 yearly_data.append({
                     "month": month_start.strftime("%Y-%m"),
                     "month_name": month_start.strftime("%B"),
-                    "total_hours": self.format_hours_to_duration(month_hours),  # Formatted hours
-                    "total_hours_decimal": round(month_hours, 2),  # Optional: decimal
+                    "total_hours": self.format_hours_to_duration(month_hours),
+                    "total_hours_decimal": round(month_hours, 2),
                     "entry_count": entry_count,
                     "days_with_entries": active_days_count
                 })
@@ -1539,15 +1771,248 @@ class WorkHoursOverviewAPIView(APIView):
                 yearly_total_hours += month_hours
                 yearly_total_entries += entry_count
 
-            return Response({
+            response_data = {
                 "status": "success",
                 "view": "year",
                 "year": str(year),
-                "total_hours": self.format_hours_to_duration(yearly_total_hours),  # Formatted total
-                "total_hours_decimal": round(yearly_total_hours, 2),  # Optional: decimal
+                "total_hours": self.format_hours_to_duration(yearly_total_hours),
+                "total_hours_decimal": round(yearly_total_hours, 2),
                 "total_entries": yearly_total_entries,
                 "months": yearly_data
-            })
+            }
+            
+            # Add user info if filtering by user
+            if user_info:
+                response_data["user"] = user_info
+
+            return Response(response_data)
+
+# class WorkHoursOverviewAPIView(APIView):
+#     """
+#     Work hours overview API
+    
+#     Supported views:
+#     • ?view=week          → current week (Mon–Sun)
+#     • ?view=week&year=2026&week=6   → specific week
+#     • ?view=year          → current year (all 12 months summary)
+#     • ?view=year&year=2026   → specific year (all 12 months)
+#     """
+#     permission_classes = [IsAuthenticated]
+
+#     def parse_duration_to_hours(self, duration_str):
+#         """Convert duration string like '1h 30m' to decimal hours (1.5)"""
+#         if not duration_str:
+#             return 0
+        
+#         if isinstance(duration_str, (int, float)):
+#             return float(duration_str)
+        
+#         duration_str = str(duration_str).strip()
+        
+#         try:
+#             return float(duration_str)
+#         except ValueError:
+#             pass
+        
+#         hours = 0
+#         minutes = 0
+        
+#         hour_match = re.search(r'(\d+(?:\.\d+)?)\s*h', duration_str, re.IGNORECASE)
+#         if hour_match:
+#             hours = float(hour_match.group(1))
+        
+#         minute_match = re.search(r'(\d+(?:\.\d+)?)\s*m', duration_str, re.IGNORECASE)
+#         if minute_match:
+#             minutes = float(minute_match.group(1))
+        
+#         if not hour_match and not minute_match:
+#             try:
+#                 return float(duration_str)
+#             except ValueError:
+#                 return 0
+        
+#         return hours + (minutes / 60)
+
+#     def format_hours_to_duration(self, hours):
+#         """Convert decimal hours (2.5) to readable format like '2h 30m'"""
+#         if not hours or hours == 0:
+#             return "0h"
+        
+#         total_minutes = int(hours * 60)
+#         h = total_minutes // 60
+#         m = total_minutes % 60
+        
+#         if h > 0 and m > 0:
+#             return f"{h}h {m}m"
+#         elif h > 0:
+#             return f"{h}h"
+#         else:
+#             return f"{m}m"
+
+#     def get(self, request):
+#         user = request.user
+#         today = timezone.now().date()
+
+#         view_mode = request.query_params.get('view', 'week').lower()
+
+#         if view_mode not in ['week', 'year']:
+#             return Response(
+#                 {"error": "Invalid view parameter. Use ?view=week or ?view=year"},
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+#         year = int(request.query_params.get('year', today.year))
+
+#         # ────────────────────────────────────────────────
+#         # WEEK VIEW
+#         # ────────────────────────────────────────────────
+#         if view_mode == 'week':
+#             week_input = request.query_params.get('week')
+
+#             if week_input:
+#                 if '-W' in week_input:
+#                     try:
+#                         y, w = week_input.split('-W')
+#                         year = int(y)
+#                         week_num = int(w)
+#                     except Exception:
+#                         return Response({"error": "Invalid week format (use YYYY-WWW)"}, status=400)
+#                 else:
+#                     try:
+#                         week_num = int(week_input)
+#                     except Exception:
+#                         return Response({"error": "Invalid week number"}, status=400)
+#             else:
+#                 # current week
+#                 _, week_num, _ = today.isocalendar()
+
+#             # Calculate Monday of target week
+#             jan4 = date(year, 1, 4)
+#             monday_week1 = jan4 - timedelta(days=jan4.weekday())
+#             start_date = monday_week1 + timedelta(weeks=week_num - 1)
+#             end_date = start_date + timedelta(days=6)
+
+#             title_key = "week"
+#             title_value = f"{year}-W{week_num:02d}"
+#             range_str = f"{start_date.isoformat()} to {end_date.isoformat()}"
+
+#             # Get all entries in date range
+#             qs = TaskList.objects.filter(date__range=[start_date, end_date])
+#             if not user.is_staff:
+#                 qs = qs.filter(user=user)
+
+#             # Get all entries with their duration strings
+#             entries = qs.values('date', 'duration')
+            
+#             # Aggregate manually since durations are strings
+#             daily_map = {}
+#             for entry in entries:
+#                 entry_date = entry['date']
+#                 duration_str = entry['duration']
+#                 hours = self.parse_duration_to_hours(duration_str)
+                
+#                 if entry_date not in daily_map:
+#                     daily_map[entry_date] = {
+#                         'duration': 0.0,
+#                         'count': 0
+#                     }
+#                 daily_map[entry_date]['duration'] += hours
+#                 daily_map[entry_date]['count'] += 1
+
+#             days = []
+#             total_hours = 0.0
+#             total_entries = 0
+#             day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+#             current = start_date
+#             for i in range(7):
+#                 data = daily_map.get(current, {'duration': 0.0, 'count': 0})
+                
+#                 # Format hours to readable format
+#                 formatted_hours = self.format_hours_to_duration(data['duration'])
+                
+#                 days.append({
+#                     "day": day_names[i],
+#                     "date": current.isoformat(),
+#                     "duration_hours": formatted_hours,  # Now returns "2h 30m" instead of "2.50"
+#                     "duration_decimal": round(data['duration'], 2),  # Optional: keep decimal for calculations
+#                     "entry_count": data['count']
+#                 })
+
+#                 total_hours += data['duration']
+#                 total_entries += data['count']
+#                 current += timedelta(days=1)
+
+#             return Response({
+#                 "status": "success",
+#                 "view": "week",
+#                 title_key: title_value,
+#                 "date_range": range_str,
+#                 "total_hours": self.format_hours_to_duration(total_hours),  # Formatted total
+#                 "total_hours_decimal": round(total_hours, 2),  # Optional: decimal total
+#                 "total_entries": total_entries,
+#                 "days": days
+#             })
+
+#         # ────────────────────────────────────────────────
+#         # YEAR VIEW - summary per month
+#         # ────────────────────────────────────────────────
+#         else:  # view == 'year'
+#             yearly_data = []
+#             yearly_total_hours = 0.0
+#             yearly_total_entries = 0
+
+#             for m in range(1, 13):
+#                 try:
+#                     month_start = date(year, m, 1)
+#                     next_month_start = date(year + 1, 1, 1) if m == 12 else date(year, m + 1, 1)
+#                     month_end = next_month_start - timedelta(days=1)
+#                 except ValueError:
+#                     continue
+
+#                 # Get all entries for this month
+#                 qs = TaskList.objects.filter(date__range=[month_start, month_end])
+#                 if not user.is_staff:
+#                     qs = qs.filter(user=user)
+
+#                 # Get all entries with their duration strings
+#                 entries = qs.values('date', 'duration')
+                
+#                 # Calculate totals manually
+#                 month_hours = 0.0
+#                 unique_dates = set()
+#                 entry_count = 0
+                
+#                 for entry in entries:
+#                     duration_str = entry['duration']
+#                     hours = self.parse_duration_to_hours(duration_str)
+#                     month_hours += hours
+#                     entry_count += 1
+#                     unique_dates.add(entry['date'])
+                
+#                 active_days_count = len(unique_dates)
+
+#                 yearly_data.append({
+#                     "month": month_start.strftime("%Y-%m"),
+#                     "month_name": month_start.strftime("%B"),
+#                     "total_hours": self.format_hours_to_duration(month_hours),  # Formatted hours
+#                     "total_hours_decimal": round(month_hours, 2),  # Optional: decimal
+#                     "entry_count": entry_count,
+#                     "days_with_entries": active_days_count
+#                 })
+
+#                 yearly_total_hours += month_hours
+#                 yearly_total_entries += entry_count
+
+#             return Response({
+#                 "status": "success",
+#                 "view": "year",
+#                 "year": str(year),
+#                 "total_hours": self.format_hours_to_duration(yearly_total_hours),  # Formatted total
+#                 "total_hours_decimal": round(yearly_total_hours, 2),  # Optional: decimal
+#                 "total_entries": yearly_total_entries,
+#                 "months": yearly_data
+#             })
 
 # class TopMembersAPIView(APIView):
 #     """
@@ -1634,6 +2099,166 @@ from .models import TaskList
 
 User = get_user_model()
 
+# class TopMembersAPIView(APIView):
+#     """
+#     GET /task/top-members/
+    
+#     Returns top users ranked by total task hours (shown as hrs + mins).
+    
+#     Query params:
+#     - limit: number of top members (default 10, max 50)
+#     - period: overall / today (default: overall)
+#     """
+#     permission_classes = [IsAuthenticated]
+
+#     def parse_duration_to_hours(self, duration_str):
+#         """Convert duration string like '4.50', '1h 30m', or '4h 30m' to decimal hours (4.5)"""
+#         if not duration_str:
+#             return 0
+        
+#         if isinstance(duration_str, (int, float)):
+#             return float(duration_str)
+        
+#         duration_str = str(duration_str).strip()
+        
+#         # Try parsing as decimal number first
+#         try:
+#             return float(duration_str)
+#         except ValueError:
+#             pass
+        
+#         # Parse "Xh Ym" format
+#         hours = 0
+#         minutes = 0
+        
+#         hour_match = re.search(r'(\d+(?:\.\d+)?)\s*h', duration_str, re.IGNORECASE)
+#         if hour_match:
+#             hours = float(hour_match.group(1))
+        
+#         minute_match = re.search(r'(\d+(?:\.\d+)?)\s*m', duration_str, re.IGNORECASE)
+#         if minute_match:
+#             minutes = float(minute_match.group(1))
+        
+#         # If no patterns matched, try to convert directly
+#         if not hour_match and not minute_match:
+#             try:
+#                 return float(duration_str)
+#             except ValueError:
+#                 return 0
+        
+#         return hours + (minutes / 60)
+
+#     def format_hours_to_duration(self, hours):
+#         """Convert decimal hours (2.5) to readable format like '2h 30m'"""
+#         if not hours or hours == 0:
+#             return "0h"
+        
+#         total_minutes = int(hours * 60)
+#         h = total_minutes // 60
+#         m = total_minutes % 60
+        
+#         if h > 0 and m > 0:
+#             return f"{h}h {m}m"
+#         elif h > 0:
+#             return f"{h}h"
+#         else:
+#             return f"{m}m"
+
+#     def get(self, request):
+#         limit = min(int(request.query_params.get('limit', 10)), 50)
+#         period = request.query_params.get('period', 'overall').lower()
+
+#         today = timezone.now().date()
+
+#         # Base queryset: all tasks
+#         qs = TaskList.objects.all()
+
+#         # Date filter
+#         if period == 'today':
+#             qs = qs.filter(date=today)
+#         elif period == 'overall':
+#             pass  # all time
+#         else:
+#             return Response({"error": "Invalid period. Use: overall / today"}, status=400)
+
+#         if not request.user.is_staff:
+#             qs = qs.filter(user=request.user)
+
+#         # Get all tasks with user and duration data
+#         # Use the actual field names from your User model
+#         tasks = qs.select_related('user').values(
+#             'user__id',
+#             'user__firstname',  # Use firstname instead of username
+#             'user__email',
+#             'duration'
+#         )
+
+#         # Manual aggregation by user
+#         user_data = {}
+        
+#         for task in tasks:
+#             user_id = task['user__id']
+            
+#             if not user_id:
+#                 continue
+                
+#             duration_str = task['duration']
+#             hours = self.parse_duration_to_hours(duration_str)
+            
+#             if user_id not in user_data:
+#                 user_data[user_id] = {
+#                     'user_id': user_id,
+#                     'firstname': task['user__firstname'],
+#                     'email': task['user__email'],
+#                     'total_hours': 0,
+#                     'task_count': 0
+#                 }
+            
+#             user_data[user_id]['total_hours'] += hours
+#             user_data[user_id]['task_count'] += 1
+
+#         # Convert to list and sort by total_hours
+#         top_members_list = list(user_data.values())
+#         top_members_list.sort(key=lambda x: x['total_hours'], reverse=True)
+#         top_members_list = top_members_list[:limit]
+
+#         # Format result with hrs + mins
+#         result = []
+#         rank = 1
+#         for row in top_members_list:
+#             total_hours = row['total_hours']
+            
+#             # Get name - use firstname, fallback to email if needed
+#             name = row['firstname'] or "Unknown User"
+#             display_name = row['firstname'] or row['email'] or "N/A"
+
+#             result.append({
+#                 "rank": rank,
+#                 "user_id": row['user_id'],
+#                 "name": name,
+#                 "display_name": display_name,
+#                 "email": row['email'],
+#                 "total_time": self.format_hours_to_duration(total_hours),
+#                 "total_hours_decimal": f"{total_hours:.2f}",
+#                 "task_count": row['task_count']
+#             })
+#             rank += 1
+
+#         # Get total active members - adjust based on your User model
+#         # You might have an 'is_active' field or similar
+#         try:
+#             total_members = User.objects.filter(is_active=True).count()
+#         except:
+#             # If is_active field doesn't exist, count all users
+#             total_members = User.objects.count()
+
+#         return Response({
+#             "status": "success",
+#             "total_members_in_system": total_members,
+#             "period": period.capitalize(),
+#             "top_members_count": len(result),
+#             "top_members": result
+#         })    
 class TopMembersAPIView(APIView):
     """
     GET /task/top-members/
@@ -1705,7 +2330,7 @@ class TopMembersAPIView(APIView):
 
         today = timezone.now().date()
 
-        # Base queryset: all tasks
+        # Base queryset: all tasks (NO RESTRICTION - shows ALL users' data)
         qs = TaskList.objects.all()
 
         # Date filter
@@ -1716,11 +2341,12 @@ class TopMembersAPIView(APIView):
         else:
             return Response({"error": "Invalid period. Use: overall / today"}, status=400)
 
-        if not request.user.is_staff:
-            qs = qs.filter(user=request.user)
+        # REMOVED: The staff check that was hiding data
+        # Now ALL users can see ALL other users' data
+        # if not request.user.is_staff:
+        #     qs = qs.filter(user=request.user)
 
         # Get all tasks with user and duration data
-        # Use the actual field names from your User model
         tasks = qs.select_related('user').values(
             'user__id',
             'user__firstname',  # Use firstname instead of username
@@ -1779,8 +2405,7 @@ class TopMembersAPIView(APIView):
             })
             rank += 1
 
-        # Get total active members - adjust based on your User model
-        # You might have an 'is_active' field or similar
+        # Get total active members
         try:
             total_members = User.objects.filter(is_active=True).count()
         except:
@@ -1793,7 +2418,7 @@ class TopMembersAPIView(APIView):
             "period": period.capitalize(),
             "top_members_count": len(result),
             "top_members": result
-        })    
+        })
 # class TimeDistributionAPIView(APIView):
 
 #     def get(self, request):
@@ -2106,14 +2731,41 @@ class RecentTasksAPIView(APIView):
 
     def get(self, request):
         user = request.user
-
-        # Get last 10 tasks
-        queryset = (
-            TaskList.objects
-            .select_related("task", "platform", "status", "subtask")
-            .filter(user=user)
-            .order_by("-date", "-id")[:10]
-        )
+        
+        # Get user_id parameter
+        user_id = request.query_params.get('user_id')
+        
+        # Permission check for user_id parameter
+        if user_id and not user.is_staff:
+            return Response(
+                {"error": "You don't have permission to view other users' tasks"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get limit parameter (default 10)
+        limit = request.query_params.get('limit', 10)
+        try:
+            limit = int(limit)
+            if limit > 100:  # Max limit to prevent performance issues
+                limit = 100
+        except ValueError:
+            limit = 10
+        
+        # Base queryset
+        queryset = TaskList.objects.select_related(
+            "task", "platform", "status", "subtask"
+        ).order_by("-date", "-id")
+        
+        # Apply user filters
+        if user.is_staff and user_id:
+            # Staff filtering by specific user
+            queryset = queryset.filter(user_id=user_id)
+        elif not user.is_staff:
+            # Non-staff users can only see their own tasks
+            queryset = queryset.filter(user=user)
+        
+        # Get last N tasks
+        queryset = queryset[:limit]
 
         data = []
 
@@ -2138,6 +2790,95 @@ class RecentTasksAPIView(APIView):
             })
 
         return Response(data)
+
+# class RecentTasksAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def parse_duration_to_hours(self, duration_str):
+#         """Convert duration string like '1h 30m' to decimal hours (1.5)"""
+#         if not duration_str:
+#             return 0
+        
+#         if isinstance(duration_str, (int, float)):
+#             return float(duration_str)
+        
+#         duration_str = str(duration_str).strip()
+        
+#         try:
+#             return float(duration_str)
+#         except ValueError:
+#             pass
+        
+#         hours = 0
+#         minutes = 0
+        
+#         hour_match = re.search(r'(\d+(?:\.\d+)?)\s*h', duration_str, re.IGNORECASE)
+#         if hour_match:
+#             hours = float(hour_match.group(1))
+        
+#         minute_match = re.search(r'(\d+(?:\.\d+)?)\s*m', duration_str, re.IGNORECASE)
+#         if minute_match:
+#             minutes = float(minute_match.group(1))
+        
+#         if not hour_match and not minute_match:
+#             try:
+#                 return float(duration_str)
+#             except ValueError:
+#                 return 0
+        
+#         return hours + (minutes / 60)
+
+#     def format_hours_to_duration(self, hours):
+#         """Convert decimal hours (2.5) to readable format like '2h 30m'"""
+#         if not hours or hours == 0:
+#             return "0h"
+        
+#         total_minutes = int(hours * 60)
+#         h = total_minutes // 60
+#         m = total_minutes % 60
+        
+#         if h > 0 and m > 0:
+#             return f"{h}h {m}m"
+#         elif h > 0:
+#             return f"{h}h"
+#         else:
+#             return f"{m}m"
+
+#     def get(self, request):
+#         user = request.user
+
+#         # Get last 10 tasks
+#         queryset = (
+#             TaskList.objects
+#             .select_related("task", "platform", "status", "subtask")
+#             .filter(user=user)
+#             .order_by("-date", "-id")[:10]
+#         )
+
+#         data = []
+
+#         for task in queryset:
+#             # Parse duration string to hours
+#             total_hours = self.parse_duration_to_hours(task.duration)
+            
+#             # Format hours to readable duration string
+#             duration_str = self.format_hours_to_duration(total_hours)
+
+#             data.append({
+#                 "id": task.id,
+#                 "task": task.task.name if task.task else "",
+#                 "subtask": task.subtask.name if task.subtask else "",
+#                 "platform": task.platform.name if task.platform else "",
+#                 "date": task.date.strftime("%d %b %Y") if task.date else "",
+#                 "duration": duration_str,  # Formatted like "2h 30m"
+#                 "duration_decimal": round(total_hours, 2),  # Optional: decimal version
+#                 "status": task.status.name if task.status else "",
+#                 "description": task.description if task.description else "",
+#                 "bitrix_id": task.bitrix_id if task.bitrix_id else ""
+#             })
+
+#         return Response(data)
+
 # class TopUsedTasksAPIView(APIView):
 #     permission_classes = [IsAuthenticated]
 
@@ -2232,8 +2973,38 @@ class TopUsedTasksAPIView(APIView):
     def get(self, request):
         user = request.user
         
-        # Get all tasks with their duration strings
-        task_entries = TaskList.objects.filter(user=user).values("task", "task__name", "duration")
+        # Get user_id parameter
+        user_id = request.query_params.get('user_id')
+        
+        # Permission check for user_id parameter
+        if user_id and not user.is_staff:
+            return Response(
+                {"error": "You don't have permission to view other users' tasks"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get limit parameter (default 10)
+        limit = request.query_params.get('limit', 10)
+        try:
+            limit = int(limit)
+            if limit > 50:  # Max limit to prevent performance issues
+                limit = 50
+        except ValueError:
+            limit = 10
+        
+        # Base queryset
+        task_entries = TaskList.objects.values("task", "task__name", "duration", "user_id")
+        
+        # Apply user filters
+        if user.is_staff and user_id:
+            # Staff filtering by specific user
+            task_entries = task_entries.filter(user_id=user_id)
+        elif not user.is_staff:
+            # Non-staff users can only see their own tasks
+            task_entries = task_entries.filter(user=user)
+        else:
+            # Staff with no user_id - get all users' tasks
+            pass
         
         # Aggregate durations
         task_durations = {}
@@ -2242,11 +3013,15 @@ class TopUsedTasksAPIView(APIView):
             task_name = entry["task__name"]
             duration_str = entry["duration"]
             
+            # Skip if task_id is None
+            if not task_id:
+                continue
+                
             hours = self.parse_duration_to_hours(duration_str)
             
             if task_id not in task_durations:
                 task_durations[task_id] = {
-                    "name": task_name,
+                    "name": task_name or "Unknown Task",
                     "total_hours": 0
                 }
             task_durations[task_id]["total_hours"] += hours
@@ -2261,10 +3036,10 @@ class TopUsedTasksAPIView(APIView):
         ]
         
         tasks_list.sort(key=lambda x: x["total_hours"], reverse=True)
-        tasks = tasks_list[:10]
+        tasks = tasks_list[:limit]
         
-        # Calculate total time
-        total_time = sum(t["total_hours"] for t in tasks)
+        # Calculate total time for percentage calculation
+        total_time = sum(t["total_hours"] for t in tasks) if tasks else 0
         
         data = []
         for i, task in enumerate(tasks, start=1):
@@ -2274,12 +3049,118 @@ class TopUsedTasksAPIView(APIView):
             data.append({
                 "id": i,
                 "task": task["task__name"],
-                "hours": self.format_hours_to_duration(hours),  # This returns "2h 30m" instead of 2.5
-                "hours_decimal": round(hours, 1),  # Optional: keep decimal for calculations
+                "hours": self.format_hours_to_duration(hours),
+                "hours_decimal": round(hours, 1),
                 "percentage": round(percentage),
             })
         
         return Response(data)
+
+# class TopUsedTasksAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def parse_duration_to_hours(self, duration_str):
+#         """Convert duration string like '1h 30m' to decimal hours (1.5) for calculation"""
+#         if not duration_str:
+#             return 0
+        
+#         if isinstance(duration_str, (int, float)):
+#             return float(duration_str)
+        
+#         duration_str = str(duration_str).strip()
+        
+#         try:
+#             return float(duration_str)
+#         except ValueError:
+#             pass
+        
+#         hours = 0
+#         minutes = 0
+        
+#         hour_match = re.search(r'(\d+(?:\.\d+)?)\s*h', duration_str, re.IGNORECASE)
+#         if hour_match:
+#             hours = float(hour_match.group(1))
+        
+#         minute_match = re.search(r'(\d+(?:\.\d+)?)\s*m', duration_str, re.IGNORECASE)
+#         if minute_match:
+#             minutes = float(minute_match.group(1))
+        
+#         if not hour_match and not minute_match:
+#             try:
+#                 return float(duration_str)
+#             except ValueError:
+#                 return 0
+        
+#         return hours + (minutes / 60)
+
+#     def format_hours_to_duration(self, hours):
+#         """Convert decimal hours (2.5) to readable format like '2h 30m'"""
+#         if not hours or hours == 0:
+#             return "0h"
+        
+#         total_minutes = int(hours * 60)
+#         h = total_minutes // 60
+#         m = total_minutes % 60
+        
+#         if h > 0 and m > 0:
+#             return f"{h}h {m}m"
+#         elif h > 0:
+#             return f"{h}h"
+#         else:
+#             return f"{m}m"
+
+#     def get(self, request):
+#         user = request.user
+        
+#         # Get all tasks with their duration strings
+#         task_entries = TaskList.objects.filter(user=user).values("task", "task__name", "duration")
+        
+#         # Aggregate durations
+#         task_durations = {}
+#         for entry in task_entries:
+#             task_id = entry["task"]
+#             task_name = entry["task__name"]
+#             duration_str = entry["duration"]
+            
+#             hours = self.parse_duration_to_hours(duration_str)
+            
+#             if task_id not in task_durations:
+#                 task_durations[task_id] = {
+#                     "name": task_name,
+#                     "total_hours": 0
+#                 }
+#             task_durations[task_id]["total_hours"] += hours
+        
+#         # Convert to list and sort by total hours
+#         tasks_list = [
+#             {
+#                 "task__name": data["name"],
+#                 "total_hours": data["total_hours"]
+#             }
+#             for data in task_durations.values()
+#         ]
+        
+#         tasks_list.sort(key=lambda x: x["total_hours"], reverse=True)
+#         tasks = tasks_list[:10]
+        
+#         # Calculate total time
+#         total_time = sum(t["total_hours"] for t in tasks)
+        
+#         data = []
+#         for i, task in enumerate(tasks, start=1):
+#             hours = task["total_hours"]
+#             percentage = (hours / total_time * 100) if total_time > 0 else 0
+            
+#             data.append({
+#                 "id": i,
+#                 "task": task["task__name"],
+#                 "hours": self.format_hours_to_duration(hours),  # This returns "2h 30m" instead of 2.5
+#                 "hours_decimal": round(hours, 1),  # Optional: keep decimal for calculations
+#                 "percentage": round(percentage),
+#             })
+        
+#         return Response(data)
+
 # class TopPlatformsAPIView(APIView):
 #     permission_classes = [IsAuthenticated]
 
@@ -3172,7 +4053,7 @@ class ApprovalTableAPIView(APIView):
             "submitted": "Submitted",
             "approved": "Approved",
             "rejected": "Rejected",
-            "completed": "Completed",
+            # "completed": "Completed",
         }
 
         grouped = defaultdict(lambda: defaultdict(dict))
@@ -3359,36 +4240,107 @@ class ApprovalStatusOverviewAPIView(APIView):
             return Response({"error": "Invalid view"}, status=400)
 
         # ---------------- APPROVER FILTER ----------------
-        # Only tasks where the user is first or second level approver
-        queryset = queryset.filter(Q(l1_approver=user) | Q(l2_approver=user))
+        # Get distinct tasks where user is either L1 or L2 approver
+        approver_tasks = queryset.filter(
+            Q(l1_approver=user) | Q(l2_approver=user)
+        ).distinct()
 
-        # ---------------- AGGREGATE COUNTS ----------------
-        pending_count = queryset.filter(
-            Q(l1_approver=user, l1_approved_at__isnull=True, l1_rejected_at__isnull=True) |
-            Q(l2_approver=user, l2_approved_at__isnull=True, l2_rejected_at__isnull=True)
-        ).count()
+        # ---------------- SEPARATE COUNTS FOR EACH APPROVAL LEVEL ----------------
+        pending_count = 0
+        approved_count = 0
+        rejected_count = 0
+        completed_count = 0
 
-        approved_count = queryset.filter(
-            Q(l1_approver=user, l1_approved_at__isnull=False) |
-            Q(l2_approver=user, l2_approved_at__isnull=False)
-        ).count()
+        for task in approver_tasks:
+            # Check if user is L1 approver for this task
+            if task.l1_approver == user:
+                if task.l1_approved_at and not task.l1_rejected_at:
+                    approved_count += 1
+                elif task.l1_rejected_at:
+                    rejected_count += 1
+                elif not task.l1_approved_at and not task.l1_rejected_at:
+                    pending_count += 1
+            
+            # Check if user is L2 approver for this task
+            if task.l2_approver == user:
+                if task.l2_approved_at and not task.l2_rejected_at:
+                    approved_count += 1
+                elif task.l2_rejected_at:
+                    rejected_count += 1
+                elif not task.l2_approved_at and not task.l2_rejected_at:
+                    pending_count += 1
+            
+            # Check if task is completed (status)
+            if task.status and task.status.name and task.status.name.lower() == "completed":
+                completed_count += 1
 
-        rejected_count = queryset.filter(
-            Q(l1_approver=user, l1_rejected_at__isnull=False) |
-            Q(l2_approver=user, l2_rejected_at__isnull=False)
-        ).count()
-
-        completed_count = queryset.filter(status__name__iexact="Completed").count()
-
-        total_count = pending_count + approved_count + rejected_count + completed_count
+        total_count = approver_tasks.count()
 
         return Response({
+            "view": view_type,
             "total": total_count,
-            "completed": completed_count,
             "pending": pending_count,
             "approved": approved_count,
             "rejected": rejected_count,
+            "completed": completed_count,
+            "pending_percentage": round((pending_count / total_count * 100), 2) if total_count > 0 else 0,
+            "approved_percentage": round((approved_count / total_count * 100), 2) if total_count > 0 else 0,
+            "rejected_percentage": round((rejected_count / total_count * 100), 2) if total_count > 0 else 0,
+            "completed_percentage": round((completed_count / total_count * 100), 2) if total_count > 0 else 0,
         })
+    
+# class ApprovalStatusOverviewAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def get(self, request):
+#         user = request.user
+#         view_type = request.query_params.get("view", "daily")  # daily, weekly, monthly
+
+#         today = timezone.now().date()
+
+#         # ---------------- DATE FILTER ----------------
+#         if view_type == "daily":
+#             queryset = TaskList.objects.filter(date=today)
+#         elif view_type == "weekly":
+#             start_date = today - timedelta(days=7)
+#             queryset = TaskList.objects.filter(date__range=[start_date, today])
+#         elif view_type == "monthly":
+#             start_date = today - timedelta(days=30)
+#             queryset = TaskList.objects.filter(date__range=[start_date, today])
+#         else:
+#             return Response({"error": "Invalid view"}, status=400)
+
+#         # ---------------- APPROVER FILTER ----------------
+#         # Only tasks where the user is first or second level approver
+#         queryset = queryset.filter(Q(l1_approver=user) | Q(l2_approver=user))
+
+#         # ---------------- AGGREGATE COUNTS ----------------
+#         pending_count = queryset.filter(
+#             Q(l1_approver=user, l1_approved_at__isnull=True, l1_rejected_at__isnull=True) |
+#             Q(l2_approver=user, l2_approved_at__isnull=True, l2_rejected_at__isnull=True)
+#         ).count()
+
+#         approved_count = queryset.filter(
+#             Q(l1_approver=user, l1_approved_at__isnull=False) |
+#             Q(l2_approver=user, l2_approved_at__isnull=False)
+#         ).count()
+
+#         rejected_count = queryset.filter(
+#             Q(l1_approver=user, l1_rejected_at__isnull=False) |
+#             Q(l2_approver=user, l2_rejected_at__isnull=False)
+#         ).count()
+
+#         completed_count = queryset.filter(status__name__iexact="Completed").count()
+
+#         total_count = pending_count + approved_count + rejected_count + completed_count
+
+#         return Response({
+#             "total": total_count,
+#             "completed": completed_count,
+#             "pending": pending_count,
+#             "approved": approved_count,
+#             "rejected": rejected_count,
+#         })
 
 
 # class ApprovalStatusOverviewAPIView(APIView):
@@ -4198,6 +5150,7 @@ class TaskCountsAPIView(APIView):
                 for task in pending_l2_tasks
             ]
         }
+
 # class TaskCountsAPIView(APIView):
 #         permission_classes = [IsAuthenticated]
         
@@ -4476,13 +5429,24 @@ class TaskStatusOverviewAPIView(APIView):
     def get(self, request):
         user = request.user
         
-        # Get time filter parameter
+        # Get parameters
+        user_id = request.query_params.get('user_id')
         time_filter = request.query_params.get('time_filter', 'all')  # all, day, week, month
         specific_date = request.query_params.get('date')  # For specific date (YYYY-MM-DD)
+        
+        # Permission check for user_id parameter
+        if user_id and not user.is_staff:
+            return Response(
+                {"error": "You don't have permission to view other users' data"},
+                status=http_status.HTTP_403_FORBIDDEN
+            )
         
         # Base queryset based on user permissions
         if user.is_staff:
             base_queryset = TaskList.objects.select_related('status')
+            # Apply user_id filter for staff
+            if user_id:
+                base_queryset = base_queryset.filter(user_id=user_id)
         else:
             base_queryset = TaskList.objects.select_related('status').filter(
                 Q(user=user) |
@@ -4495,22 +5459,22 @@ class TaskStatusOverviewAPIView(APIView):
         
         if specific_date:
             # Filter by specific date
-            specific_date_obj = datetime.strptime(specific_date, '%Y-%m-%d').date()
-            date_start = timezone.make_aware(datetime.combine(specific_date_obj, datetime.min.time()))
-            date_end = timezone.make_aware(datetime.combine(specific_date_obj, datetime.max.time()))
-            base_queryset = base_queryset.filter(date__range=[date_start, date_end])
+            try:
+                specific_date_obj = datetime.strptime(specific_date, '%Y-%m-%d').date()
+                base_queryset = base_queryset.filter(date=specific_date_obj)
+            except ValueError:
+                return Response(
+                    {"error": "Invalid date format. Use YYYY-MM-DD"},
+                    status=http_status.HTTP_400_BAD_REQUEST
+                )
         elif time_filter == 'day':
             # Today's tasks
-            date_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
-            date_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
-            base_queryset = base_queryset.filter(date__range=[date_start, date_end])
+            base_queryset = base_queryset.filter(date=today)
         elif time_filter == 'week':
             # Current week (Monday to Sunday)
             start_of_week = today - timedelta(days=today.weekday())
             end_of_week = start_of_week + timedelta(days=6)
-            week_start = timezone.make_aware(datetime.combine(start_of_week, datetime.min.time()))
-            week_end = timezone.make_aware(datetime.combine(end_of_week, datetime.max.time()))
-            base_queryset = base_queryset.filter(date__range=[week_start, week_end])
+            base_queryset = base_queryset.filter(date__range=[start_of_week, end_of_week])
         elif time_filter == 'month':
             # Current month
             start_of_month = today.replace(day=1)
@@ -4518,9 +5482,15 @@ class TaskStatusOverviewAPIView(APIView):
                 end_of_month = today.replace(year=today.year+1, month=1, day=1) - timedelta(days=1)
             else:
                 end_of_month = today.replace(month=today.month+1, day=1) - timedelta(days=1)
-            month_start = timezone.make_aware(datetime.combine(start_of_month, datetime.min.time()))
-            month_end = timezone.make_aware(datetime.combine(end_of_month, datetime.max.time()))
-            base_queryset = base_queryset.filter(date__range=[month_start, month_end])
+            base_queryset = base_queryset.filter(date__range=[start_of_month, end_of_month])
+        elif time_filter == 'all':
+            # No filter - get all tasks
+            pass
+        else:
+            return Response(
+                {"error": "Invalid time_filter. Use: all, day, week, month"},
+                status=http_status.HTTP_400_BAD_REQUEST
+            )
         
         # Get all status objects from master.models
         all_statuses = Status.objects.all()
@@ -4567,9 +5537,29 @@ class TaskStatusOverviewAPIView(APIView):
                 Q(l2_approver=user, l2_approved_at__isnull=True, l2_rejected_at__isnull=True)
             ).count()
         
+        # Get user info if user_id is provided
+        user_info = None
+        if user_id and user.is_staff:
+            try:
+                target_user = User.objects.get(id=user_id)
+                user_info = {
+                    "id": target_user.id,
+                    "username": target_user.name,
+                    "email": target_user.email,
+                    "first_name": target_user.firstname,
+                    # "last_name": target_user.last_name
+                }
+            except User.DoesNotExist:
+                return Response(
+                    {"error": f"User with id {user_id} not found"},
+                    status=http_status.HTTP_404_NOT_FOUND
+                )
+        
         # Prepare response
         response_data = {
             "filter_applied": {
+                "user_id": int(user_id) if user_id else None,
+                "user_info": user_info,
                 "type": time_filter,
                 "date": specific_date if specific_date else None,
                 "period": self._get_period_description(time_filter, today, specific_date)
@@ -4616,6 +5606,153 @@ class TaskStatusOverviewAPIView(APIView):
             return f"Tasks for {today.strftime('%B %Y')}"
         else:
             return "All tasks"
+
+# class TaskStatusOverviewAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+    
+#     def get(self, request):
+#         user = request.user
+        
+#         # Get time filter parameter
+#         time_filter = request.query_params.get('time_filter', 'all')  # all, day, week, month
+#         specific_date = request.query_params.get('date')  # For specific date (YYYY-MM-DD)
+        
+#         # Base queryset based on user permissions
+#         if user.is_staff:
+#             base_queryset = TaskList.objects.select_related('status')
+#         else:
+#             base_queryset = TaskList.objects.select_related('status').filter(
+#                 Q(user=user) |
+#                 Q(l1_approver=user) |
+#                 Q(l2_approver=user)
+#             )
+        
+#         # Apply time-based filters
+#         today = timezone.now().date()
+        
+#         if specific_date:
+#             # Filter by specific date
+#             specific_date_obj = datetime.strptime(specific_date, '%Y-%m-%d').date()
+#             date_start = timezone.make_aware(datetime.combine(specific_date_obj, datetime.min.time()))
+#             date_end = timezone.make_aware(datetime.combine(specific_date_obj, datetime.max.time()))
+#             base_queryset = base_queryset.filter(date__range=[date_start, date_end])
+#         elif time_filter == 'day':
+#             # Today's tasks
+#             date_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+#             date_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
+#             base_queryset = base_queryset.filter(date__range=[date_start, date_end])
+#         elif time_filter == 'week':
+#             # Current week (Monday to Sunday)
+#             start_of_week = today - timedelta(days=today.weekday())
+#             end_of_week = start_of_week + timedelta(days=6)
+#             week_start = timezone.make_aware(datetime.combine(start_of_week, datetime.min.time()))
+#             week_end = timezone.make_aware(datetime.combine(end_of_week, datetime.max.time()))
+#             base_queryset = base_queryset.filter(date__range=[week_start, week_end])
+#         elif time_filter == 'month':
+#             # Current month
+#             start_of_month = today.replace(day=1)
+#             if today.month == 12:
+#                 end_of_month = today.replace(year=today.year+1, month=1, day=1) - timedelta(days=1)
+#             else:
+#                 end_of_month = today.replace(month=today.month+1, day=1) - timedelta(days=1)
+#             month_start = timezone.make_aware(datetime.combine(start_of_month, datetime.min.time()))
+#             month_end = timezone.make_aware(datetime.combine(end_of_month, datetime.max.time()))
+#             base_queryset = base_queryset.filter(date__range=[month_start, month_end])
+        
+#         # Get all status objects from master.models
+#         all_statuses = Status.objects.all()
+        
+#         # Calculate total tasks count
+#         total_tasks = base_queryset.count()
+        
+#         # Calculate counts and percentages for each status
+#         status_overview = []
+        
+#         for status_obj in all_statuses:
+#             status_count = base_queryset.filter(status=status_obj).count()
+#             percentage = (status_count / total_tasks * 100) if total_tasks > 0 else 0
+            
+#             status_overview.append({
+#                 "status_id": status_obj.id,
+#                 "status_name": status_obj.name,
+#                 "count": status_count,
+#                 "percentage": round(percentage, 2),
+#                 "formatted_percentage": f"{round(percentage, 2)}%"
+#             })
+        
+#         # Sort by count in descending order
+#         status_overview.sort(key=lambda x: x['count'], reverse=True)
+        
+#         # Get specific status objects for summary
+#         in_progress_status = Status.objects.filter(name__iexact='In Progress').first()
+#         completed_status = Status.objects.filter(name__iexact='Completed').first()
+#         rejected_status = Status.objects.filter(name__iexact='Rejected').first()
+#         draft_status = Status.objects.filter(name__iexact='Draft').first()
+        
+#         # Calculate pending approval tasks
+#         pending_approval = 0
+#         if user.is_staff:
+#             pending_approval = base_queryset.filter(
+#                 Q(l1_approved_at__isnull=True, l1_approver__isnull=False) |
+#                 Q(l2_approved_at__isnull=True, l2_approver__isnull=False)
+#             ).exclude(
+#                 Q(l1_rejected_at__isnull=False) | Q(l2_rejected_at__isnull=False)
+#             ).count()
+#         else:
+#             pending_approval = base_queryset.filter(
+#                 Q(l1_approver=user, l1_approved_at__isnull=True, l1_rejected_at__isnull=True) |
+#                 Q(l2_approver=user, l2_approved_at__isnull=True, l2_rejected_at__isnull=True)
+#             ).count()
+        
+#         # Prepare response
+#         response_data = {
+#             "filter_applied": {
+#                 "type": time_filter,
+#                 "date": specific_date if specific_date else None,
+#                 "period": self._get_period_description(time_filter, today, specific_date)
+#             },
+#             "total_tasks": total_tasks,
+#             "status_overview": status_overview,
+#             "summary": {
+#                 "in_progress": {
+#                     "count": base_queryset.filter(status=in_progress_status).count() if in_progress_status else 0,
+#                     "percentage": round((base_queryset.filter(status=in_progress_status).count() / total_tasks * 100), 2) if total_tasks > 0 and in_progress_status else 0
+#                 },
+#                 "completed": {
+#                     "count": base_queryset.filter(status=completed_status).count() if completed_status else 0,
+#                     "percentage": round((base_queryset.filter(status=completed_status).count() / total_tasks * 100), 2) if total_tasks > 0 and completed_status else 0
+#                 },
+#                 "rejected": {
+#                     "count": base_queryset.filter(status=rejected_status).count() if rejected_status else 0,
+#                     "percentage": round((base_queryset.filter(status=rejected_status).count() / total_tasks * 100), 2) if total_tasks > 0 and rejected_status else 0
+#                 },
+#                 "draft": {
+#                     "count": base_queryset.filter(status=draft_status).count() if draft_status else 0,
+#                     "percentage": round((base_queryset.filter(status=draft_status).count() / total_tasks * 100), 2) if total_tasks > 0 and draft_status else 0
+#                 },
+#                 "pending_approval": {
+#                     "count": pending_approval,
+#                     "percentage": round((pending_approval / total_tasks * 100), 2) if total_tasks > 0 else 0
+#                 }
+#             }
+#         }
+        
+#         return Response(response_data, status=http_status.HTTP_200_OK)
+    
+#     def _get_period_description(self, time_filter, today, specific_date):
+#         """Helper method to get human-readable period description"""
+#         if specific_date:
+#             return f"Tasks for {specific_date}"
+#         elif time_filter == 'day':
+#             return f"Tasks for {today.strftime('%Y-%m-%d')}"
+#         elif time_filter == 'week':
+#             start_of_week = today - timedelta(days=today.weekday())
+#             end_of_week = start_of_week + timedelta(days=6)
+#             return f"Tasks from {start_of_week.strftime('%Y-%m-%d')} to {end_of_week.strftime('%Y-%m-%d')}"
+#         elif time_filter == 'month':
+#             return f"Tasks for {today.strftime('%B %Y')}"
+#         else:
+#             return "All tasks"
         
 # class TimeDistributionByMembersAPIView(APIView):
 #     permission_classes = [IsAuthenticated]
@@ -4784,7 +5921,7 @@ from django.utils import timezone
 from datetime import datetime, timedelta
 from django.contrib.auth import get_user_model
 from .models import TaskList, Status
-
+import http
 User = get_user_model()
 
 class TimeDistributionByMembersAPIView(APIView):
@@ -4827,6 +5964,22 @@ class TimeDistributionByMembersAPIView(APIView):
         
         return hours + (minutes / 60)
     
+    def format_hours_to_duration(self, hours):
+        """Convert decimal hours to readable format like '3h 30m'"""
+        if not hours or hours == 0:
+            return "0h"
+        
+        total_minutes = int(hours * 60)
+        h = total_minutes // 60
+        m = total_minutes % 60
+        
+        if h > 0 and m > 0:
+            return f"{h}h {m}m"
+        elif h > 0:
+            return f"{h}h"
+        else:
+            return f"{m}m"
+    
     def get(self, request):
         user = request.user
         
@@ -4838,9 +5991,9 @@ class TimeDistributionByMembersAPIView(APIView):
         
         # Base queryset with related fields
         if user.is_staff:
-            base_queryset = TaskList.objects.select_related('user', 'status')
+            base_queryset = TaskList.objects.select_related('user', 'status', 'task', 'subtask')
         else:
-            base_queryset = TaskList.objects.select_related('user', 'status').filter(
+            base_queryset = TaskList.objects.select_related('user', 'status', 'task', 'subtask').filter(
                 Q(user=user) |
                 Q(l1_approver=user) |
                 Q(l2_approver=user)
@@ -4849,110 +6002,96 @@ class TimeDistributionByMembersAPIView(APIView):
         # Apply time filters
         base_queryset = self._apply_time_filters(base_queryset, view_param, specific_date, start_date, end_date)
         
-        # Get all tasks with their durations and status
-        tasks = base_queryset.values('user_id', 'duration', 'status__name')
+        # Get all tasks with task and subtask information
+        tasks = base_queryset.values(
+            'user_id', 
+            'user__firstname', 
+            'user__email', 
+            'task__name',
+            'subtask__name',
+            'duration', 
+            'status__name'
+        )
         
-        # Aggregate manually to handle string durations
+        # Aggregate data by user
         members_data_dict = {}
+        all_task_categories = set()
         
         for task in tasks:
             user_id = task['user_id']
-            duration_str = task['duration']
-            status_name = task['status__name']
             
-            # Skip if no user_id
             if not user_id:
                 continue
-                
-            hours = self.parse_duration_to_hours(duration_str)
             
+            # Get task name (main category)
+            task_name = task.get('task__name')
+            if not task_name:
+                task_name = "Other Tasks"
+            
+            # Get subtask name (sub category)
+            subtask_name = task.get('subtask__name')
+            
+            # Create display name for the task category
+            # Format: "Task Name" or "Task Name - Subtask Name"
+            if subtask_name:
+                display_category = f"{task_name} - {subtask_name}"
+            else:
+                display_category = task_name
+            
+            duration_str = task['duration']
+            user_name = task['user__firstname'] or f"User_{user_id}"
+            hours = self.parse_duration_to_hours(duration_str)
+            formatted_duration = self.format_hours_to_duration(hours)
+            
+            # Track all unique categories
+            all_task_categories.add(display_category)
+            
+            # Initialize user data if not exists
             if user_id not in members_data_dict:
                 members_data_dict[user_id] = {
-                    'user_id': user_id,
-                    'total_hours': 0,
-                    'completed_hours': 0,
-                    'pending_hours': 0,
-                    'total_tasks': 0,
-                    'completed_tasks': 0,
+                    'person': user_name,
+                    'email': task['user__email'],
+                    'tasks': {},
+                    'total_hours': 0
                 }
             
+            # Add or accumulate task duration
+            if display_category in members_data_dict[user_id]['tasks']:
+                # If category exists, add to existing duration
+                existing_hours = self.parse_duration_to_hours(members_data_dict[user_id]['tasks'][display_category])
+                new_hours = existing_hours + hours
+                members_data_dict[user_id]['tasks'][display_category] = self.format_hours_to_duration(new_hours)
+            else:
+                members_data_dict[user_id]['tasks'][display_category] = formatted_duration
+            
+            # Update total hours
             members_data_dict[user_id]['total_hours'] += hours
-            members_data_dict[user_id]['total_tasks'] += 1
-            
-            # Check for completed status using model's helper or direct check
-            if status_name and status_name.lower() in ['completed', 'done', 'finished']:
-                members_data_dict[user_id]['completed_hours'] += hours
-                members_data_dict[user_id]['completed_tasks'] += 1
-            
-            # Check for in progress status
-            if status_name and status_name.lower() in ['inprogress', 'in progress']:
-                members_data_dict[user_id]['pending_hours'] += hours
         
-        # Get user details and build final response
-        members_data = []
+        # Build the response in rawData format
+        result = []
         for user_id, data in members_data_dict.items():
-            try:
-                user_obj = User.objects.get(id=user_id)
-                
-                total_hours = data['total_hours']
-                completed_hours = data['completed_hours']
-                pending_hours = data['pending_hours']
-                total_tasks = data['total_tasks']
-                completed_tasks = data['completed_tasks']
-                
-                completion_rate = round((completed_tasks / total_tasks * 100), 2) if total_tasks > 0 else 0
-                avg_hours_per_task = round(total_hours / total_tasks, 2) if total_tasks > 0 else 0
-                
-                # Get username/display name - adjust based on your User model fields
-                display_name = (
-                    getattr(user_obj, 'firstname', None) or 
-                    getattr(user_obj, 'first_name', None) or 
-                    user_obj.username
-                )
-                
-                members_data.append({
-                    "user_id": user_id,
-                    "username": display_name,
-                    "email": user_obj.email,
-                    "total_hours": round(total_hours, 2),
-                    "completed_hours": round(completed_hours, 2),
-                    "pending_hours": round(pending_hours, 2),
-                    "total_tasks": total_tasks,
-                    "completed_tasks": completed_tasks,
-                    "completion_rate": completion_rate,
-                    "avg_hours_per_task": avg_hours_per_task,
-                })
-            except User.DoesNotExist:
-                continue
+            # Start with person field
+            person_data = {
+                "person": data['person']
+            }
+            
+            # Add all task categories with their durations
+            for category in sorted(all_task_categories):
+                if category in data['tasks']:
+                    person_data[category] = data['tasks'][category]
+                else:
+                    person_data[category] = "0h"
+            
+            # Optional: Add total hours if needed
+            person_data["total_hours"] = self.format_hours_to_duration(data['total_hours'])
+            
+            result.append(person_data)
         
-        # Calculate totals
-        total_all_hours = sum(member['total_hours'] for member in members_data)
+        # Sort by total hours (if you have total_hours field)
+        result.sort(key=lambda x: self.parse_duration_to_hours(x.get('total_hours', '0h')), reverse=True)
         
-        # Add percentages
-        for member in members_data:
-            member['percentage'] = round((member['total_hours'] / total_all_hours * 100), 2) if total_all_hours > 0 else 0
-            member['formatted_percentage'] = f"{member['percentage']}%"
-        
-        # Sort by total hours descending
-        members_data.sort(key=lambda x: x['total_hours'], reverse=True)
-        
-        # Calculate summary
-        active_members = len([m for m in members_data if m['total_hours'] > 0])
-        
-        response_data = {
-            "filter_applied": self._get_filter_description(view_param, specific_date, start_date, end_date),
-            "summary": {
-                "total_members": len(members_data),
-                "active_members": active_members,
-                "total_hours_all_members": round(total_all_hours, 2),
-                "average_hours_per_member": round(total_all_hours / len(members_data), 2) if members_data else 0,
-                "total_completed_hours": round(sum(m['completed_hours'] for m in members_data), 2),
-                "total_pending_hours": round(sum(m['pending_hours'] for m in members_data), 2),
-            },
-            "members": members_data
-        }
-        
-        return Response(response_data, status=http_status.HTTP_200_OK)
+        # Return exactly the rawData format
+        return Response(result, status=status.HTTP_200_OK)
     
     def _apply_time_filters(self, queryset, view_param, specific_date, start_date, end_date):
         """Apply time filters to queryset based on view parameter"""
@@ -4984,24 +6123,221 @@ class TimeDistributionByMembersAPIView(APIView):
             return queryset.filter(date__range=[start_of_month, end_of_month])
         
         return queryset
+# class TimeDistributionByMembersAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
     
-    def _get_filter_description(self, view_param, specific_date, start_date, end_date):
-        """Get human-readable filter description"""
-        if specific_date:
-            return f"Tasks for {specific_date}"
-        elif start_date and end_date:
-            return f"Tasks from {start_date} to {end_date}"
-        elif view_param == 'daily':
-            return f"Today's tasks ({timezone.now().date().strftime('%Y-%m-%d')})"
-        elif view_param == 'weekly':
-            today = timezone.now().date()
-            start_of_week = today - timedelta(days=today.weekday())
-            end_of_week = start_of_week + timedelta(days=6)
-            return f"This week's tasks ({start_of_week.strftime('%Y-%m-%d')} to {end_of_week.strftime('%Y-%m-%d')})"
-        elif view_param == 'monthly':
-            return f"This month's tasks ({timezone.now().date().strftime('%B %Y')})"
-        else:
-            return "All tasks"        
+#     def parse_duration_to_hours(self, duration_str):
+#         """Convert duration string like '4.50', '1h 30m', or '4h 30m' to decimal hours (4.5)"""
+#         if not duration_str:
+#             return 0
+        
+#         if isinstance(duration_str, (int, float)):
+#             return float(duration_str)
+        
+#         duration_str = str(duration_str).strip()
+        
+#         # Try parsing as decimal number first
+#         try:
+#             return float(duration_str)
+#         except ValueError:
+#             pass
+        
+#         # Parse "Xh Ym" format
+#         hours = 0
+#         minutes = 0
+        
+#         hour_match = re.search(r'(\d+(?:\.\d+)?)\s*h', duration_str, re.IGNORECASE)
+#         if hour_match:
+#             hours = float(hour_match.group(1))
+        
+#         minute_match = re.search(r'(\d+(?:\.\d+)?)\s*m', duration_str, re.IGNORECASE)
+#         if minute_match:
+#             minutes = float(minute_match.group(1))
+        
+#         # If no patterns matched, try to convert directly
+#         if not hour_match and not minute_match:
+#             try:
+#                 return float(duration_str)
+#             except ValueError:
+#                 return 0
+        
+#         return hours + (minutes / 60)
+    
+#     def get(self, request):
+#         user = request.user
+        
+#         # Get filter parameters
+#         view_param = request.query_params.get('view', 'daily')
+#         specific_date = request.query_params.get('date')
+#         start_date = request.query_params.get('start_date')
+#         end_date = request.query_params.get('end_date')
+        
+#         # Base queryset with related fields
+#         if user.is_staff:
+#             base_queryset = TaskList.objects.select_related('user', 'status')
+#         else:
+#             base_queryset = TaskList.objects.select_related('user', 'status').filter(
+#                 Q(user=user) |
+#                 Q(l1_approver=user) |
+#                 Q(l2_approver=user)
+#             )
+        
+#         # Apply time filters
+#         base_queryset = self._apply_time_filters(base_queryset, view_param, specific_date, start_date, end_date)
+        
+#         # Get all tasks with their durations and status
+#         tasks = base_queryset.values('user_id', 'duration', 'status__name')
+        
+#         # Aggregate manually to handle string durations
+#         members_data_dict = {}
+        
+#         for task in tasks:
+#             user_id = task['user_id']
+#             duration_str = task['duration']
+#             status_name = task['status__name']
+            
+#             # Skip if no user_id
+#             if not user_id:
+#                 continue
+                
+#             hours = self.parse_duration_to_hours(duration_str)
+            
+#             if user_id not in members_data_dict:
+#                 members_data_dict[user_id] = {
+#                     'user_id': user_id,
+#                     'total_hours': 0,
+#                     'completed_hours': 0,
+#                     'pending_hours': 0,
+#                     'total_tasks': 0,
+#                     'completed_tasks': 0,
+#                 }
+            
+#             members_data_dict[user_id]['total_hours'] += hours
+#             members_data_dict[user_id]['total_tasks'] += 1
+            
+#             # Check for completed status using model's helper or direct check
+#             if status_name and status_name.lower() in ['completed', 'done', 'finished']:
+#                 members_data_dict[user_id]['completed_hours'] += hours
+#                 members_data_dict[user_id]['completed_tasks'] += 1
+            
+#             # Check for in progress status
+#             if status_name and status_name.lower() in ['inprogress', 'in progress']:
+#                 members_data_dict[user_id]['pending_hours'] += hours
+        
+#         # Get user details and build final response
+#         members_data = []
+#         for user_id, data in members_data_dict.items():
+#             try:
+#                 user_obj = User.objects.get(id=user_id)
+                
+#                 total_hours = data['total_hours']
+#                 completed_hours = data['completed_hours']
+#                 pending_hours = data['pending_hours']
+#                 total_tasks = data['total_tasks']
+#                 completed_tasks = data['completed_tasks']
+                
+#                 completion_rate = round((completed_tasks / total_tasks * 100), 2) if total_tasks > 0 else 0
+#                 avg_hours_per_task = round(total_hours / total_tasks, 2) if total_tasks > 0 else 0
+                
+#                 # Get username/display name - adjust based on your User model fields
+#                 display_name = (
+#                     getattr(user_obj, 'firstname', None) or 
+#                     getattr(user_obj, 'first_name', None) or 
+#                     user_obj.username
+#                 )
+                
+#                 members_data.append({
+#                     "user_id": user_id,
+#                     "username": display_name,
+#                     "email": user_obj.email,
+#                     "total_hours": round(total_hours, 2),
+#                     "completed_hours": round(completed_hours, 2),
+#                     "pending_hours": round(pending_hours, 2),
+#                     "total_tasks": total_tasks,
+#                     "completed_tasks": completed_tasks,
+#                     "completion_rate": completion_rate,
+#                     "avg_hours_per_task": avg_hours_per_task,
+#                 })
+#             except User.DoesNotExist:
+#                 continue
+        
+#         # Calculate totals
+#         total_all_hours = sum(member['total_hours'] for member in members_data)
+        
+#         # Add percentages
+#         for member in members_data:
+#             member['percentage'] = round((member['total_hours'] / total_all_hours * 100), 2) if total_all_hours > 0 else 0
+#             member['formatted_percentage'] = f"{member['percentage']}%"
+        
+#         # Sort by total hours descending
+#         members_data.sort(key=lambda x: x['total_hours'], reverse=True)
+        
+#         # Calculate summary
+#         active_members = len([m for m in members_data if m['total_hours'] > 0])
+        
+#         response_data = {
+#             "filter_applied": self._get_filter_description(view_param, specific_date, start_date, end_date),
+#             "summary": {
+#                 "total_members": len(members_data),
+#                 "active_members": active_members,
+#                 "total_hours_all_members": round(total_all_hours, 2),
+#                 "average_hours_per_member": round(total_all_hours / len(members_data), 2) if members_data else 0,
+#                 "total_completed_hours": round(sum(m['completed_hours'] for m in members_data), 2),
+#                 "total_pending_hours": round(sum(m['pending_hours'] for m in members_data), 2),
+#             },
+#             "members": members_data
+#         }
+        
+#         return Response(response_data, status=http_status.HTTP_200_OK)
+    
+#     def _apply_time_filters(self, queryset, view_param, specific_date, start_date, end_date):
+#         """Apply time filters to queryset based on view parameter"""
+#         today = timezone.now().date()
+        
+#         if specific_date:
+#             specific_date_obj = datetime.strptime(specific_date, '%Y-%m-%d').date()
+#             return queryset.filter(date=specific_date_obj)
+        
+#         elif start_date and end_date:
+#             start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
+#             end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
+#             return queryset.filter(date__range=[start_date_obj, end_date_obj])
+        
+#         elif view_param == 'daily':
+#             return queryset.filter(date=today)
+        
+#         elif view_param == 'weekly':
+#             start_of_week = today - timedelta(days=today.weekday())
+#             end_of_week = start_of_week + timedelta(days=6)
+#             return queryset.filter(date__range=[start_of_week, end_of_week])
+        
+#         elif view_param == 'monthly':
+#             start_of_month = today.replace(day=1)
+#             if today.month == 12:
+#                 end_of_month = today.replace(year=today.year+1, month=1, day=1) - timedelta(days=1)
+#             else:
+#                 end_of_month = today.replace(month=today.month+1, day=1) - timedelta(days=1)
+#             return queryset.filter(date__range=[start_of_month, end_of_month])
+        
+#         return queryset
+    
+#     def _get_filter_description(self, view_param, specific_date, start_date, end_date):
+#         """Get human-readable filter description"""
+#         if specific_date:
+#             return f"Tasks for {specific_date}"
+#         elif start_date and end_date:
+#             return f"Tasks from {start_date} to {end_date}"
+#         elif view_param == 'daily':
+#             return f"Today's tasks ({timezone.now().date().strftime('%Y-%m-%d')})"
+#         elif view_param == 'weekly':
+#             today = timezone.now().date()
+#             start_of_week = today - timedelta(days=today.weekday())
+#             end_of_week = start_of_week + timedelta(days=6)
+#             return f"This week's tasks ({start_of_week.strftime('%Y-%m-%d')} to {end_of_week.strftime('%Y-%m-%d')})"
+#         elif view_param == 'monthly':
+#             return f"This month's tasks ({timezone.now().date().strftime('%B %Y')})"
+#         else:
+#             return "All tasks"        
 class TaskCompletionSimpleAPIView(APIView):
     permission_classes = [IsAuthenticated]
     
