@@ -501,13 +501,63 @@ class TaskListAPIView(APIView):
         response_data.sort(key=lambda x: x['date'], reverse=True)
 
         return Response(response_data)
-    def post(self, request):
-        if request.user.is_staff:
-            return Response(
-                {"error": "Staff users cannot create tasks"},
-                status=status.HTTP_403_FORBIDDEN
-            )
+    # def post(self, request):
+    #     if request.user.is_staff:
+    #         return Response(
+    #             {"error": "Staff users cannot create tasks"},
+    #             status=status.HTTP_403_FORBIDDEN
+    #         )
 
+    #     data = request.data
+    #     is_bulk = isinstance(data, list)
+
+    #     serializer = self.serializer_class(
+    #         data=data,
+    #         many=is_bulk,
+    #         context={'request': request}
+    #     )
+
+    #     if not serializer.is_valid():
+    #         print("Create errors:", serializer.errors)
+    #         return Response(serializer.errors, status=400)
+
+    #     tasks = serializer.save()
+
+    #     for task in (tasks if is_bulk else [tasks]):
+    #         if task.user.first_level_manager:
+    #             task.l1_approver = task.user.first_level_manager
+    #         if task.user.second_level_manager:
+    #             task.l2_approver = task.user.second_level_manager
+
+    #         task.save()
+    #         self._create_audit_log(
+    #             task=task,
+    #             action='CREATE',
+    #             new_values=self.serializer_class(task).data,
+    #             remarks="Bulk task created" if is_bulk else "Task created"
+    #         )
+
+    #         # =========================================
+    #         # 🚀 EMAIL TRIGGER LOGIC (IMPORTANT)
+    #         # =========================================
+    #         status_name = (task.status.name or "").lower().strip()
+
+    #         # ✅ Only send email if NOT draft
+    #         if status_name in ['in progress', 'submitted']:
+    #             if task.l1_approver:
+    #                 print("[EMAIL TRIGGER] Sending to L1 Approver")
+    #                 send_task_email(
+    #                     event="TASK_SUBMITTED",
+    #                     task=task,
+    #                     recipient=task.l1_approver
+    #                 )
+
+
+    #     return Response(serializer.data, status=status.HTTP_201_CREATED)
+  
+    def post(self, request):
+        # Staff restriction removed - now staff CAN create tasks
+        
         data = request.data
         is_bulk = isinstance(data, list)
 
@@ -537,12 +587,9 @@ class TaskListAPIView(APIView):
                 remarks="Bulk task created" if is_bulk else "Task created"
             )
 
-            # =========================================
-            # 🚀 EMAIL TRIGGER LOGIC (IMPORTANT)
-            # =========================================
+            # Email trigger logic
             status_name = (task.status.name or "").lower().strip()
 
-            # ✅ Only send email if NOT draft
             if status_name in ['in progress', 'submitted']:
                 if task.l1_approver:
                     print("[EMAIL TRIGGER] Sending to L1 Approver")
@@ -551,7 +598,6 @@ class TaskListAPIView(APIView):
                         task=task,
                         recipient=task.l1_approver
                     )
-
 
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -2570,9 +2616,75 @@ class TimeDistributionAPIView(APIView):
         else:
             return f"{m}m"
 
+    # def get(self, request):
+    #     user = request.user
+    #     view_type = request.query_params.get("view", "daily")
+
+    #     today = timezone.now().date()
+
+    #     # ---------------- DATE FILTER ----------------
+    #     if view_type == "daily":
+    #         queryset = TaskList.objects.filter(date=today)
+
+    #     elif view_type == "weekly":
+    #         start_date = today - timedelta(days=7)
+    #         queryset = TaskList.objects.filter(date__range=[start_date, today])
+
+    #     elif view_type == "monthly":
+    #         start_date = today - timedelta(days=30)
+    #         queryset = TaskList.objects.filter(date__range=[start_date, today])
+
+    #     else:
+    #         return Response({"error": "Invalid view"}, status=400)
+
+    #     # ---------------- USER FILTER ----------------
+    #     if not user.is_staff:
+    #         queryset = queryset.filter(user=user)
+
+    #     # Get all entries with their duration strings
+    #     entries = queryset.values("task__name", "duration")
+        
+    #     # Aggregate durations manually since they're stored as strings
+    #     task_durations = {}
+    #     for entry in entries:
+    #         task_name = entry["task__name"]
+    #         if not task_name:  # Skip tasks without name
+    #             continue
+                
+    #         duration_str = entry["duration"]
+    #         hours = self.parse_duration_to_hours(duration_str)
+            
+    #         if task_name not in task_durations:
+    #             task_durations[task_name] = 0
+    #         task_durations[task_name] += hours
+        
+    #     # Convert to list and sort by total hours
+    #     tasks_list = [
+    #         {"task__name": task_name, "total_hours": total_hours}
+    #         for task_name, total_hours in task_durations.items()
+    #     ]
+    #     tasks_list.sort(key=lambda x: x["total_hours"], reverse=True)
+        
+    #     # Prepare response data
+    #     labels = [task["task__name"] for task in tasks_list]
+    #     series = [round(task["total_hours"], 1) for task in tasks_list]  # Decimal hours for chart
+        
+    #     # Optional: Also provide formatted hours for display
+    #     formatted_series = [self.format_hours_to_duration(task["total_hours"]) for task in tasks_list]
+
+    #     return Response({
+    #         "labels": labels if labels else ["No Data"],
+    #         "series": series if series else [0],
+    #         "formatted_series": formatted_series if formatted_series else ["0h"],  # For display
+    #         "view": view_type,
+    #         "total_hours": self.format_hours_to_duration(sum(series)),
+    #         "total_hours_decimal": round(sum(series), 1)
+    #     })
+
     def get(self, request):
-        user = request.user
+        request_user = request.user
         view_type = request.query_params.get("view", "daily")
+        user_id = request.query_params.get("user_id")  # 👈 get user_id from request
 
         today = timezone.now().date()
 
@@ -2592,45 +2704,51 @@ class TimeDistributionAPIView(APIView):
             return Response({"error": "Invalid view"}, status=400)
 
         # ---------------- USER FILTER ----------------
-        if not user.is_staff:
-            queryset = queryset.filter(user=user)
+        if user_id:
+            # Only allow staff/admin to access other users' data
+            if request_user.is_staff:
+                queryset = queryset.filter(user_id=user_id)
+            else:
+                # Non-staff can only access their own data
+                queryset = queryset.filter(user=request_user)
+        else:
+            queryset = queryset.filter(user=request_user)
 
-        # Get all entries with their duration strings
+        # ---------------- FETCH DATA ----------------
         entries = queryset.values("task__name", "duration")
-        
-        # Aggregate durations manually since they're stored as strings
+
         task_durations = {}
         for entry in entries:
             task_name = entry["task__name"]
-            if not task_name:  # Skip tasks without name
+            if not task_name:
                 continue
-                
+
             duration_str = entry["duration"]
             hours = self.parse_duration_to_hours(duration_str)
-            
-            if task_name not in task_durations:
-                task_durations[task_name] = 0
-            task_durations[task_name] += hours
-        
-        # Convert to list and sort by total hours
+
+            task_durations[task_name] = task_durations.get(task_name, 0) + hours
+
+        # ---------------- SORT ----------------
         tasks_list = [
             {"task__name": task_name, "total_hours": total_hours}
             for task_name, total_hours in task_durations.items()
         ]
         tasks_list.sort(key=lambda x: x["total_hours"], reverse=True)
-        
-        # Prepare response data
+
+        # ---------------- RESPONSE ----------------
         labels = [task["task__name"] for task in tasks_list]
-        series = [round(task["total_hours"], 1) for task in tasks_list]  # Decimal hours for chart
-        
-        # Optional: Also provide formatted hours for display
-        formatted_series = [self.format_hours_to_duration(task["total_hours"]) for task in tasks_list]
+        series = [round(task["total_hours"], 1) for task in tasks_list]
+        formatted_series = [
+            self.format_hours_to_duration(task["total_hours"])
+            for task in tasks_list
+        ]
 
         return Response({
             "labels": labels if labels else ["No Data"],
             "series": series if series else [0],
-            "formatted_series": formatted_series if formatted_series else ["0h"],  # For display
+            "formatted_series": formatted_series if formatted_series else ["0h"],
             "view": view_type,
+            "selected_user_id": user_id if user_id else request_user.id,
             "total_hours": self.format_hours_to_duration(sum(series)),
             "total_hours_decimal": round(sum(series), 1)
         })
@@ -4987,6 +5105,7 @@ class ApproverTaskCountsAPIView(APIView):
             },
             "total_pending": l1_pending + l2_pending
         })
+
 
 class TaskCountsAPIView(APIView):
     permission_classes = [IsAuthenticated]

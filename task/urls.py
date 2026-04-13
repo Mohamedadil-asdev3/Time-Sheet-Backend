@@ -8,7 +8,7 @@ from django.urls import path
 from .views import (
 TaskListAPIView,TaskListAuditLogAPIView,SimpleTimeLogView,TimeLogStatsAPIView,DailyTimelineAPIView,WorkHoursOverviewAPIView,TopMembersAPIView,TaskApprovalAPIView,
 TimeDistributionAPIView,RecentTasksAPIView,TopUsedTasksAPIView,TopPlatformsAPIView,PlatformPerformanceAPIView,ProfileAPIView,ApprovalTableAPIView,
- RecentRequestAPIView,ApprovalStatusOverviewAPIView,TaskCountsAPIView,UserTaskCountsAPIView,TaskStatusOverviewAPIView,TimeDistributionByMembersAPIView,TaskCompletionSimpleAPIView,BulkTaskListUpdate,TaskActionAPIView
+ RecentRequestAPIView,ApprovalStatusOverviewAPIView,TaskCountsAPIView,UserTaskCountsAPIView,TaskStatusOverviewAPIView,TimeDistributionByMembersAPIView,TaskCompletionSimpleAPIView,BulkTaskListUpdate,TaskActionAPIView,ApproverTaskCountsAPIView
 
 )
 
@@ -35,6 +35,7 @@ urlpatterns = [
     path('tasks/time-distribution/',TimeDistributionAPIView.as_view(), name='time-distribution-user'),
     path('tasks/recent-tasks/',RecentTasksAPIView.as_view(), name='recent-tasks-user'),
     path("tasks/top-tasks/", TopUsedTasksAPIView.as_view(), name="top-tasks-user"),
+    path('tasks/approval-counts/', ApproverTaskCountsAPIView.as_view(), name='task-counts'),
     path('top-members/', TopMembersAPIView.as_view(), name='top-members'),
     path('tasks/approvals/', TaskApprovalAPIView.as_view(), name='task-approvals-approver'),
     path('tasks/approval-status-overview/', ApprovalStatusOverviewAPIView.as_view(), name='approval-status-overview'),
